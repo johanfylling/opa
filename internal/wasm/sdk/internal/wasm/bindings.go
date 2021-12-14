@@ -103,6 +103,8 @@ func (d *builtinDispatcher) Reset(ctx context.Context, seed io.Reader, ns time.T
 		ParentID:               0,
 		InterQueryBuiltinCache: iqbCache,
 		PrintHook:              ph,
+		// FIXME When running eval -t wasm --strict-builtin-errors --capabilities capabilities.json 'http.send({"method": "GET", "url": "https://example.com"})', the following causes failure to validate but no error.
+		AllowNet: []string{"localhost"},
 	}
 
 }

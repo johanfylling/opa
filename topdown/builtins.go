@@ -50,6 +50,7 @@ type (
 		ParentID               uint64                // identifies parent of query being evaluated
 		PrintHook              print.Hook            // provides callback function to use for printing
 		rand                   *rand.Rand            // randomization source for non-security-sensitive operations
+		AllowNet               []string
 	}
 
 	// BuiltinFunc defines an interface for implementing built-in functions.

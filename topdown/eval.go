@@ -714,6 +714,7 @@ func (e *eval) evalCall(terms []*ast.Term, iter unifyIterator) error {
 		QueryID:                e.queryID,
 		ParentID:               parentID,
 		PrintHook:              e.printHook,
+		AllowNet:               e.compiler.Capabilities.AllowNet,
 	}
 
 	eval := evalBuiltin{
