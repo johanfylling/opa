@@ -237,6 +237,14 @@ func (e *eval) traceWasm(x ast.Node, target *ast.Ref) {
 	e.traceEvent(WasmOp, x, "", target)
 }
 
+func (e *eval) traceUnify(a, b *ast.Term) {
+	e.traceEvent(UnifyOp, ast.Equality.Expr(a, b), "", nil)
+}
+
+func (e *eval) traceFailedAssertion(x ast.Node) {
+	e.traceEvent(FailedAssertionOp, x, "", nil)
+}
+
 func (e *eval) traceEvent(op Op, x ast.Node, msg string, target *ast.Ref) {
 
 	if !e.traceEnabled {
@@ -864,7 +872,7 @@ func (e *eval) biunify(a, b *ast.Term, b1, b2 *bindings, iter unifyIterator) err
 	a, b1 = b1.apply(a)
 	b, b2 = b2.apply(b)
 	if e.traceEnabled {
-		e.traceEvent(UnifyOp, ast.Equality.Expr(a, b), "", nil)
+		e.traceUnify(a, b)
 	}
 	switch vA := a.Value.(type) {
 	case ast.Var, ast.Ref, *ast.ArrayComprehension, *ast.SetComprehension, *ast.ObjectComprehension:
@@ -1035,6 +1043,8 @@ func (e *eval) biunifyValues(a, b *ast.Term, b1, b2 *bindings, iter unifyIterato
 
 	if a.Equal(b) {
 		return iter()
+	} else {
+		e.traceFailedAssertion(ast.NotEqual.Expr(a, b)) // TODO: Use Builtin.InvExpr
 	}
 
 	return nil
@@ -1742,6 +1752,7 @@ func (e evalBuiltin) eval(iter unifyIterator) error {
 			case e.bi.Decl.Result() == nil:
 				return iter()
 			case len(operands) == numDeclArgs:
+				// TODO: Here too?
 				if v.Compare(ast.Boolean(false)) == 0 {
 					return nil // nothing to do
 				}
@@ -1766,8 +1777,15 @@ func (e evalBuiltin) eval(iter unifyIterator) error {
 		case e.bi.Decl.Result() == nil:
 			err = iter()
 		case len(operands) == numDeclArgs:
+			// FIXME: Do we need to consider negated expressions here?
 			if output.Value.Compare(ast.Boolean(false)) != 0 {
 				err = iter()
+			} else if invExpr := e.bi.InvExpr(operands...); invExpr != nil {
+				// This is a lonesome statement that evaluated to false
+				e.e.traceFailedAssertion(invExpr)
+			} else {
+				// Built-in has no explicit inverse, so we just trace the 'false' result
+				e.e.traceFailedAssertion(ast.NewTerm(ast.Boolean(false)))
 			} // else: nothing to do, don't iter()
 		default:
 			err = e.e.unify(e.terms[endIndex], output, iter)

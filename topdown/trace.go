@@ -62,7 +62,8 @@ const (
 	// UnifyOp is emitted when two terms are unified.  Node will be set to an
 	// equality expression with the two terms.  This Node will not have location
 	// info.
-	UnifyOp Op = "Unify"
+	UnifyOp           Op = "Unify"
+	FailedAssertionOp Op = "FailedAssertion"
 )
 
 // VarMetadata provides some user facing information about
