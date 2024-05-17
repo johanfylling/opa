@@ -92,6 +92,16 @@ func (r PrettyReporter) Report(ch chan *Result) error {
 				fmt.Fprintln(newIndentingWriter(r.Output), strings.TrimSpace(string(tr.Output)))
 				fmt.Fprintln(r.Output)
 			}
+			if r.FailureLine && tr.Location != nil {
+				for i := len(tr.Trace) - 1; i >= 0; i-- {
+					e := tr.Trace[i]
+					if e.Op == topdown.FailOp && e.Location != nil && e.Location.File != "" && !e.Location.Equal(tr.Location) {
+						_, _ = fmt.Fprintf(r.Output, "  %v:\n", e.Location)
+						_, _ = fmt.Fprintln(r.Output, topdown.PrettyExprWithVars(e, topdown.PrettyExprOpts{Prefix: "  "}))
+						break
+					}
+				}
+			}
 		}
 		if tr.Error != nil {
 			fmt.Fprintf(r.Output, "  %v\n", tr.Error)

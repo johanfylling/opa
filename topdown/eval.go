@@ -242,7 +242,7 @@ func (e *eval) traceUnify(a, b *ast.Term) {
 }
 
 func (e *eval) traceFailedAssertion(x ast.Node) {
-	e.traceEvent(FailedAssertionOp, x, "", nil)
+	//e.traceEvent(FailedAssertionOp, x, "", nil)
 }
 
 func (e *eval) traceEvent(op Op, x ast.Node, msg string, target *ast.Ref) {
@@ -1780,9 +1780,13 @@ func (e evalBuiltin) eval(iter unifyIterator) error {
 			// FIXME: Do we need to consider negated expressions here?
 			if output.Value.Compare(ast.Boolean(false)) != 0 {
 				err = iter()
-			} else if invExpr := e.bi.InvExpr(operands...); invExpr != nil {
+				//} else if invExpr := e.bi.InvExpr(operands...); invExpr != nil {
+				//	// This is a lonesome statement that evaluated to false
+				//	e.e.traceFailedAssertion(invExpr)
+				//} else {
+			} else if expr := e.bi.Expr(e.terms...); expr != nil {
 				// This is a lonesome statement that evaluated to false
-				e.e.traceFailedAssertion(invExpr)
+				e.e.traceFailedAssertion(expr)
 			} else {
 				// Built-in has no explicit inverse, so we just trace the 'false' result
 				e.e.traceFailedAssertion(ast.NewTerm(ast.Boolean(false)))

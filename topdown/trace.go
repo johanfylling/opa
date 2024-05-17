@@ -5,8 +5,10 @@
 package topdown
 
 import (
+	"bytes"
 	"fmt"
 	"io"
+	"sort"
 	"strings"
 
 	iStrs "github.com/open-policy-agent/opa/internal/strings"
@@ -237,15 +239,22 @@ func (b *BufferTracer) Config() TraceConfig {
 
 // PrettyTrace pretty prints the trace to the writer.
 func PrettyTrace(w io.Writer, trace []*Event) {
-	prettyTraceWith(w, trace, false)
+	PrettyTraceWithOpts(w, trace, TraceOptions{})
 }
 
 // PrettyTraceWithLocation prints the trace to the writer and includes location information
 func PrettyTraceWithLocation(w io.Writer, trace []*Event) {
-	prettyTraceWith(w, trace, true)
+	PrettyTraceWithOpts(w, trace, TraceOptions{Locations: true})
 }
 
-func prettyTraceWith(w io.Writer, trace []*Event, locations bool) {
+type TraceOptions struct {
+	Locations      bool
+	ExprVariables  bool
+	LocalVariables bool
+	//LocationVars   bool
+}
+
+func PrettyTraceWithOpts(w io.Writer, trace []*Event, opts TraceOptions) {
 	depths := depths{}
 
 	filePathAliases, longest := getShortenedFileNames(trace)
@@ -255,12 +264,34 @@ func prettyTraceWith(w io.Writer, trace []*Event, locations bool) {
 
 	for _, event := range trace {
 		depth := depths.GetOrSet(event.QueryID, event.ParentID)
-		if locations {
+		if opts.Locations {
 			location := formatLocation(event, filePathAliases)
-			fmt.Fprintf(w, "%-*s %s\n", locationWidth, location, formatEvent(event, depth))
-		} else {
-			fmt.Fprintln(w, formatEvent(event, depth))
+			_, _ = fmt.Fprintf(w, "%-*s ", locationWidth, location)
 		}
+		_, _ = fmt.Fprint(w, formatEvent(event, depth))
+		if opts.LocalVariables {
+			_, _ = fmt.Fprintf(w, " %v", event.Locals)
+		}
+		if opts.ExprVariables {
+			vars := ast.NewValueMap()
+			ast.WalkTerms(event.Node, func(term *ast.Term) bool {
+				// We walk the terms in the evaluated node
+				if term.Location == nil {
+					return false
+				}
+				if v, ok := term.Value.(ast.Var); ok {
+					meta, ok := event.LocalMetadata[v]
+					if !ok {
+						return false
+					}
+					val := event.Locals.Get(v)
+					vars.Put(meta.Name, val)
+				}
+				return false
+			})
+			_, _ = fmt.Fprintf(w, " %v", vars)
+		}
+		_, _ = fmt.Fprintln(w)
 	}
 }
 
@@ -450,6 +481,160 @@ func rewrite(event *Event) *Event {
 	cpy.Node = node
 
 	return &cpy
+}
+
+type varInfo struct {
+	VarMetadata
+	val     ast.Value
+	exprLoc *ast.Location
+	col     int
+}
+
+func (v varInfo) Value() string {
+	if v.val != nil {
+		return v.val.String()
+	}
+	return "undefined"
+}
+
+func trimLocationText(loc *ast.Location) string {
+	if loc == nil {
+		return ""
+	}
+
+	text := string(loc.Text)
+	if loc.Col == 0 {
+		return text
+	}
+
+	buf := new(bytes.Buffer)
+	for i, line := range strings.Split(text, "\n") {
+		if i == 0 {
+			buf.WriteString(line)
+		} else {
+			buf.WriteString("\n")
+			buf.WriteString(line[loc.Col-1:])
+		}
+	}
+	return buf.String()
+}
+
+type PrettyExprOpts struct {
+	Prefix string
+}
+
+func PrettyExprWithVars(e *Event, opts PrettyExprOpts) string {
+	buf := new(bytes.Buffer)
+	buf.WriteString(opts.Prefix)
+	buf.WriteString(trimLocationText(e.Location))
+	buf.WriteString("\n")
+
+	if e.Location == nil {
+		return buf.String()
+	}
+
+	expr, err := ast.ParseExpr(string(e.Location.Text))
+	if err != nil {
+		return buf.String()
+	}
+
+	exprVars := map[string]varInfo{}
+	exprCol := e.Location.Col
+
+	ast.WalkTerms(expr, func(term *ast.Term) bool {
+		if term.Location == nil {
+			return false
+		}
+		if v, ok := term.Value.(ast.Var); ok {
+			localV, meta, ok := reverseLookupInMeta(e.LocalMetadata, v)
+			if !ok {
+				return false
+			}
+			info := varInfo{
+				VarMetadata: meta,
+				val:         e.Locals.Get(localV),
+				exprLoc:     term.Location,
+			}
+			if term.Location != nil {
+				if term.Location.Row != expr.Location.Row {
+					info.col = term.Location.Col - exprCol
+				} else {
+					info.col = term.Location.Col - 1
+				}
+			}
+			exprVars[string(v)] = info
+		}
+		return false
+	})
+
+	printVarArrows(buf, exprVars, opts.Prefix)
+	return buf.String()
+}
+
+func reverseLookupInMeta(meta map[ast.Var]VarMetadata, v ast.Var) (ast.Var, VarMetadata, bool) {
+	for k, m := range meta {
+		if m.Name == v {
+			return k, m, true
+		}
+	}
+	return "", VarMetadata{}, false
+}
+
+func printVarArrows(w *bytes.Buffer, exprVars map[string]varInfo, prefix string) {
+	byCol := make([]varInfo, 0, len(exprVars))
+	for _, info := range exprVars {
+		byCol = append(byCol, info)
+	}
+	sort.Slice(byCol, func(i, j int) bool {
+		return byCol[i].col < byCol[j].col
+	})
+
+	w.WriteString(prefix)
+	printArrows(w, byCol, -1)
+	for i := len(byCol) - 1; i >= 0; i-- {
+		w.WriteString(prefix)
+		printArrows(w, byCol, i)
+	}
+}
+
+func printArrows(w *bytes.Buffer, l []varInfo, printValueAt int) {
+	prevCol := 0
+	var slice []varInfo
+	if printValueAt >= 0 {
+		slice = l[:printValueAt+1]
+	} else {
+		slice = l
+	}
+	for i, info := range slice {
+
+		isLast := i >= len(slice)-1
+		col := info.col
+
+		if !isLast && col == l[i+1].col {
+			continue
+		}
+
+		spaces := col
+		if i > 0 {
+			spaces = (col - prevCol) - 1
+		}
+
+		if spaces > 0 {
+			w.WriteString(strings.Repeat(" ", spaces))
+		}
+
+		if isLast && printValueAt >= 0 {
+			if (i > 0 && col == l[i-1].col) || (i < len(l)-1 && col == l[i+1].col) {
+				w.WriteString(fmt.Sprintf("%s: %s", info.Name, info.Value()))
+			} else {
+				w.WriteString(info.Value())
+			}
+		} else {
+			w.WriteString("|")
+		}
+		prevCol = col
+	}
+	w.WriteString("\n")
 }
 
 func init() {
