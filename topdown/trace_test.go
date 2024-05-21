@@ -1299,3 +1299,383 @@ func removeUnifyOps(trace []*Event) (result []*Event) {
 	}
 	return
 }
+
+func TestPrettyEvent(t *testing.T) {
+	tests := []struct {
+		note     string
+		exprText string
+		meta     map[ast.Var]VarMetadata
+		locals   map[ast.Value]ast.Value
+		expected string
+	}{
+		{
+			note:     "no var",
+			exprText: "1 < 2",
+			expected: `1 < 2`,
+		},
+		{
+			note:     "var, no meta",
+			exprText: "x == 1",
+			expected: `x == 1`,
+		},
+		{
+			note:     "var, no value",
+			exprText: "x == 1",
+			meta: map[ast.Var]VarMetadata{
+				ast.Var("__local0__"): {
+					Name: ast.Var("x"),
+				},
+			},
+			expected: `x == 1
+|
+undefined`,
+		},
+		{
+			note:     "var, no value #2",
+			exprText: "1 == x",
+			meta: map[ast.Var]VarMetadata{
+				ast.Var("__local0__"): {
+					Name: ast.Var("x"),
+				},
+			},
+			expected: `1 == x
+     |
+     undefined`,
+		},
+		{
+			note:     "var, no value, multiple",
+			exprText: "x == y",
+			meta: map[ast.Var]VarMetadata{
+				ast.Var("__local0__"): {
+					Name: ast.Var("x"),
+				},
+				ast.Var("__local1__"): {
+					Name: ast.Var("y"),
+				},
+			},
+			expected: `
+x == y
+|    |
+|    undefined
+undefined`,
+		},
+		{
+			note:     "var, value, multiple",
+			exprText: "x == y",
+			meta: map[ast.Var]VarMetadata{
+				ast.Var("__local0__"): {
+					Name: ast.Var("x"),
+				},
+				ast.Var("__local1__"): {
+					Name: ast.Var("y"),
+				},
+			},
+			locals: map[ast.Value]ast.Value{
+				ast.Var("__local0__"): ast.Number("1"),
+				ast.Var("__local1__"): ast.Number("2"),
+			},
+			expected: `
+x == y
+|    |
+|    2
+1`,
+		},
+		{
+			note:     "var, value, multiple #2",
+			exprText: "x == y",
+			meta: map[ast.Var]VarMetadata{
+				ast.Var("__local0__"): {
+					Name: ast.Var("x"),
+				},
+				ast.Var("__local1__"): {
+					Name: ast.Var("y"),
+				},
+			},
+			locals: map[ast.Value]ast.Value{
+				ast.Var("__local0__"): ast.Number("1"),
+			},
+			expected: `
+x == y
+|    |
+|    undefined
+1`,
+		},
+		{
+			note:     "var, multiple, value #3",
+			exprText: "x == y > z",
+			meta: map[ast.Var]VarMetadata{
+				ast.Var("__local0__"): {
+					Name: ast.Var("x"),
+				},
+				ast.Var("__local1__"): {
+					Name: ast.Var("y"),
+				},
+				ast.Var("__local2__"): {
+					Name: ast.Var("z"),
+				},
+			},
+			locals: map[ast.Value]ast.Value{
+				ast.Var("__local0__"): ast.Number("1"),
+				ast.Var("__local1__"): ast.Number("2"),
+				ast.Var("__local2__"): ast.Number("3"),
+			},
+			expected: `
+x == y > z
+|    |   |
+|    |   3
+|    2
+1`,
+		},
+		{
+			note:     "call",
+			exprText: "foo(x, y)",
+			meta: map[ast.Var]VarMetadata{
+				ast.Var("__local0__"): {
+					Name: ast.Var("x"),
+				},
+				ast.Var("__local1__"): {
+					Name: ast.Var("y"),
+				},
+			},
+			locals: map[ast.Value]ast.Value{
+				ast.Var("__local0__"): ast.Number("1"),
+				ast.Var("__local1__"): ast.Number("2"),
+			},
+			expected: `
+foo(x, y)
+    |  |
+    |  2
+    1`,
+		},
+		{
+			note:     "ref",
+			exprText: "data.foo[x] == y",
+			meta: map[ast.Var]VarMetadata{
+				ast.Var("__local0__"): {
+					Name: ast.Var("x"),
+				},
+				ast.Var("__local1__"): {
+					Name: ast.Var("y"),
+				},
+			},
+			locals: map[ast.Value]ast.Value{
+				ast.Var("__local0__"): ast.Number("1"),
+				ast.Var("__local1__"): ast.Number("2"),
+			},
+			expected: `
+data.foo[x] == y
+         |     |
+         |     2
+         1`,
+		},
+		{
+			note:     "ref #2",
+			exprText: "data.foo[x].baz[y]",
+			meta: map[ast.Var]VarMetadata{
+				ast.Var("__local0__"): {
+					Name: ast.Var("x"),
+				},
+				ast.Var("__local1__"): {
+					Name: ast.Var("y"),
+				},
+			},
+			locals: map[ast.Value]ast.Value{
+				ast.Var("__local0__"): ast.Number("bar"),
+				ast.Var("__local1__"): ast.Number("qux"),
+			},
+			expected: `
+data.foo[x].baz[y]
+         |      |
+         |      qux
+         bar`,
+		},
+		{
+			note:     "ref, no value",
+			exprText: "data.foo[x].baz[y]",
+			meta: map[ast.Var]VarMetadata{
+				ast.Var("__local0__"): {
+					Name: ast.Var("x"),
+				},
+				ast.Var("__local1__"): {
+					Name: ast.Var("y"),
+				},
+			},
+			locals: map[ast.Value]ast.Value{
+				ast.Var("__local1__"): ast.Number("qux"),
+			},
+			expected: `
+data.foo[x].baz[y]
+         |      |
+         |      qux
+         undefined`,
+		},
+		{
+			note:     "ref, no value #2",
+			exprText: "data.foo[x].baz[y]",
+			meta: map[ast.Var]VarMetadata{
+				ast.Var("__local0__"): {
+					Name: ast.Var("x"),
+				},
+				ast.Var("__local1__"): {
+					Name: ast.Var("y"),
+				},
+			},
+			locals: map[ast.Value]ast.Value{
+				ast.Var("__local0__"): ast.Number("bar"),
+			},
+			expected: `
+data.foo[x].baz[y]
+         |      |
+         |      undefined
+         bar`,
+		},
+		{
+			note: "multiline expr",
+			exprText: `[v |
+  v := x + y]`,
+			meta: map[ast.Var]VarMetadata{
+				ast.Var("__local0__"): {
+					Name: ast.Var("x"),
+				},
+				ast.Var("__local1__"): {
+					Name: ast.Var("y"),
+				},
+			},
+			locals: map[ast.Value]ast.Value{
+				ast.Var("__local0__"): ast.Number("1"),
+				ast.Var("__local1__"): ast.Number("2"),
+			},
+			expected: `
+[v |
+  v := x + y]
+       |   |
+       |   2
+       1`,
+		},
+		{
+			note: "multiline expr, multiple vars on same column",
+			exprText: `
+foo(x, y, 
+    z)`,
+			meta: map[ast.Var]VarMetadata{
+				ast.Var("__local0__"): {
+					Name: ast.Var("x"),
+				},
+				ast.Var("__local1__"): {
+					Name: ast.Var("y"),
+				},
+				ast.Var("__local2__"): {
+					Name: ast.Var("z"),
+				},
+			},
+			locals: map[ast.Value]ast.Value{
+				ast.Var("__local0__"): ast.Number("1"),
+				ast.Var("__local1__"): ast.Number("2"),
+				ast.Var("__local2__"): ast.Number("3"),
+			},
+			expected: `
+foo(x, y, 
+    z)
+    |  |
+    |  2
+    x: 1
+    z: 3`,
+		},
+		{
+			note: "multiline expr, multiple vars on same column #2",
+			exprText: `
+foo(x, y, 
+       z)`,
+			meta: map[ast.Var]VarMetadata{
+				ast.Var("__local0__"): {
+					Name: ast.Var("x"),
+				},
+				ast.Var("__local1__"): {
+					Name: ast.Var("y"),
+				},
+				ast.Var("__local2__"): {
+					Name: ast.Var("z"),
+				},
+			},
+			locals: map[ast.Value]ast.Value{
+				ast.Var("__local0__"): ast.Number("1"),
+				ast.Var("__local1__"): ast.Number("2"),
+				ast.Var("__local2__"): ast.Number("3"),
+			},
+			expected: `
+foo(x, y, 
+       z)
+    |  |
+    |  y: 2
+    |  z: 3
+    1`,
+		},
+		{
+			note: "multiline expr, multiple vars on same column #3",
+			exprText: `
+foo(x, y,
+    z, a)`,
+			meta: map[ast.Var]VarMetadata{
+				ast.Var("__local0__"): {
+					Name: ast.Var("x"),
+				},
+				ast.Var("__local1__"): {
+					Name: ast.Var("y"),
+				},
+				ast.Var("__local2__"): {
+					Name: ast.Var("z"),
+				},
+				ast.Var("__local3__"): {
+					Name: ast.Var("a"),
+				},
+			},
+			locals: map[ast.Value]ast.Value{
+				ast.Var("__local0__"): ast.Number("1"),
+				ast.Var("__local1__"): ast.Number("2"),
+				ast.Var("__local2__"): ast.Number("3"),
+				ast.Var("__local3__"): ast.Number("4"),
+			},
+			expected: `
+foo(x, y,
+    z, a)
+    |  |
+    |  y: 2
+    |  a: 4
+    x: 1
+    z: 3`,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.note, func(t *testing.T) {
+			locals := ast.NewValueMap()
+			for k, v := range tc.locals {
+				locals.Put(k, v)
+			}
+
+			// We trim the leading newline to make the test cases more readable.
+			exprText := strings.Trim(tc.exprText, "\n")
+			buf := new(bytes.Buffer)
+			err := PrettyEvent(buf,
+				&Event{
+					Op:            FailOp,
+					Location:      &ast.Location{Text: []byte(exprText)},
+					LocalMetadata: tc.meta,
+					Locals:        locals,
+				},
+				PrettyEventOpts{PrettyVars: true},
+			)
+			if err != nil {
+				t.Fatalf("Unexpected error: %s", err)
+			}
+
+			// We trim the leading newline to make the test cases more readable.
+			expected := strings.Trim(tc.expected, "\n")
+
+			actual := buf.String()
+			if actual != expected {
+				t.Errorf("Expected:\n\n%s\n\nbut got:\n\n%s", tc.expected, actual)
+			}
+		})
+	}
+}

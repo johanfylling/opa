@@ -96,8 +96,10 @@ func (r PrettyReporter) Report(ch chan *Result) error {
 				for i := len(tr.Trace) - 1; i >= 0; i-- {
 					e := tr.Trace[i]
 					if e.Op == topdown.FailOp && e.Location != nil && e.Location.File != "" && !e.Location.Equal(tr.Location) {
-						_, _ = fmt.Fprintf(r.Output, "  %v:\n", e.Location)
-						_, _ = fmt.Fprintln(r.Output, topdown.PrettyExprWithVars(e, topdown.PrettyExprOpts{Prefix: "  "}))
+						_, _ = fmt.Fprintf(newIndentingWriter(r.Output), "On row %d:\n", e.Location.Row)
+						if err := topdown.PrettyEvent(newIndentingWriter(r.Output, 4), e, topdown.PrettyEventOpts{PrettyVars: true}); err != nil {
+							return err
+						}
 						break
 					}
 				}
@@ -226,12 +228,18 @@ func (r JSONCoverageReporter) Report(ch chan *Result) error {
 }
 
 type indentingWriter struct {
-	w io.Writer
+	w      io.Writer
+	indent int
 }
 
-func newIndentingWriter(w io.Writer) indentingWriter {
+func newIndentingWriter(w io.Writer, indent ...int) indentingWriter {
+	i := 2
+	if len(indent) > 0 {
+		i = indent[0]
+	}
 	return indentingWriter{
-		w: w,
+		w:      w,
+		indent: i,
 	}
 }
 
@@ -241,7 +249,7 @@ func (w indentingWriter) Write(bs []byte) (int, error) {
 	indent := true
 	for _, b := range bs {
 		if indent {
-			wrote, err := w.w.Write([]byte("  "))
+			wrote, err := w.w.Write([]byte(strings.Repeat(" ", w.indent)))
 			if err != nil {
 				return written, err
 			}

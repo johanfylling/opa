@@ -221,6 +221,153 @@ func failTrace(t *testing.T) []*topdown.Event {
 	return *tracer
 }
 
+func TestFailVarValues(t *testing.T) {
+	tests := []struct {
+		note     string
+		files    map[string]string
+		expected string
+	}{
+		{
+			note: "simple",
+			files: map[string]string{
+				"/test.rego": `
+	package test
+
+	import rego.v1
+
+	test_foo if {
+		x := 1
+		y := 2
+		z := 3
+		x == y + z
+	}
+`,
+			},
+			expected: `%ROOT%/test.rego:
+data.test.test_foo: FAIL (%TIME%)
+  On row 10:
+    x == y + z
+    |    |   |
+    |    |   3
+    |    2
+    1
+--------------------------------------------------------------------------------
+FAIL: 1/1
+`,
+		},
+
+		// FIXME: Requires inspection of cache
+		{
+			note: "rule defined",
+			files: map[string]string{
+				"/test.rego": `package test
+import rego.v1
+
+p if {
+	input.x == 1
+}
+
+test_p if {
+	p with input.x as 2
+}`,
+			},
+			expected: `%ROOT%/test.rego:
+data.test.test_p: FAIL (%TIME%)
+  On row 9:
+    p with input.x as 2
+    |
+    undefined
+--------------------------------------------------------------------------------
+FAIL: 1/1
+`,
+		},
+		{
+			note: "rule not defined",
+			files: map[string]string{
+				"/test.rego": `package test
+import rego.v1
+
+p if {
+	input.x == 1
+}
+
+test_p if {
+	not p with input.x as 1
+}`,
+			},
+			expected: `%ROOT%/test.rego:
+data.test.test_p: FAIL (%TIME%)
+  On row 9:
+    not p with input.x as 2
+    |   |
+    |   true
+    false
+--------------------------------------------------------------------------------
+FAIL: 1/1
+`,
+		},
+
+		// TODO
+		{
+			note: "data ref",
+			files: map[string]string{
+				"/test.rego": ``,
+			},
+			expected: `%ROOT%/test.rego:`,
+		},
+		{
+			note: "comprehension",
+			files: map[string]string{
+				"/test.rego": ``,
+			},
+			expected: `%ROOT%/test.rego:`,
+		},
+		{
+			note: "every",
+			files: map[string]string{
+				"/test.rego": `package test
+import rego.v1
+
+test_foo if {
+	l := [1, 2, 3]
+	every x in l {
+		x == 1 
+	}
+}`,
+			},
+			expected: `%ROOT%/test.rego:`,
+		},
+	}
+
+	r := regexp.MustCompile(`FAIL \(.*s\)`)
+	for _, tc := range tests {
+		t.Run(tc.note, func(t *testing.T) {
+			test.WithTempFS(tc.files, func(root string) {
+				buf := new(bytes.Buffer)
+				testParams := newTestCommandParams()
+				testParams.count = 1
+				testParams.output = buf
+				testParams.errOutput = io.Discard
+				testParams.bundleMode = false
+				testParams.varValues = true
+
+				_, err := opaTest([]string{root}, testParams)
+				if err != nil {
+					t.Fatalf("Unexpected error: %s", err)
+				}
+
+				actual := r.ReplaceAllString(buf.String(), "FAIL (%TIME%)")
+				expected := strings.ReplaceAll(tc.expected, "%ROOT%", root)
+
+				//if !strings.Contains(actual, expected) {
+				if actual != expected {
+					t.Fatalf("Expected output to be:\n\n%s\n\ngot:\n\n%s", expected, actual)
+				}
+			})
+		})
+	}
+}
+
 // Assert that ignore flag is correctly used when the bundle flag is activated
 func TestIgnoreFlag(t *testing.T) {
 	files := map[string]string{
