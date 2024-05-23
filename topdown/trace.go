@@ -20,7 +20,7 @@ import (
 const (
 	minLocationWidth      = 5 // len("query")
 	maxIdealLocationWidth = 64
-	locationPadding       = 4
+	columnPadding         = 4
 )
 
 // Op defines the types of tracing events.
@@ -248,54 +248,82 @@ func PrettyTraceWithLocation(w io.Writer, trace []*Event) {
 }
 
 type PrettyTraceOptions struct {
-	Locations      bool
-	ExprVariables  bool
-	LocalVariables bool
-	//LocationVars   bool
+	Locations      bool // Include location information
+	ExprVariables  bool // Include variables found in the expression
+	LocalVariables bool // Include all local variables
+}
+
+type traceRow []string
+
+func (r *traceRow) add(s string) {
+	*r = append(*r, s)
+}
+
+type traceTable struct {
+	rows      []traceRow
+	maxWidths []int
+}
+
+func (t *traceTable) add(row traceRow) {
+	t.rows = append(t.rows, row)
+	for i := range row {
+		if i >= len(t.maxWidths) {
+			t.maxWidths = append(t.maxWidths, len(row[i]))
+		} else if len(row[i]) > t.maxWidths[i] {
+			t.maxWidths[i] = len(row[i])
+		}
+	}
+}
+
+func (t *traceTable) write(w io.Writer, padding int) {
+	for _, row := range t.rows {
+		for i, cell := range row {
+			width := t.maxWidths[i] + padding
+			if i < len(row)-1 {
+				_, _ = fmt.Fprintf(w, "%-*s ", width, cell)
+			} else {
+				_, _ = fmt.Fprintf(w, "%s", cell)
+			}
+		}
+		_, _ = fmt.Fprintln(w)
+	}
 }
 
 func PrettyTraceWithOpts(w io.Writer, trace []*Event, opts PrettyTraceOptions) {
 	depths := depths{}
 
-	filePathAliases, longest := getShortenedFileNames(trace)
+	// FIXME: Can we shorten each location as we process each trace event instead of beforehand?
+	filePathAliases, _ := getShortenedFileNames(trace)
 
-	// Always include some padding between the trace and location
-	locationWidth := longest + locationPadding
+	table := traceTable{}
 
 	for _, event := range trace {
-		// The writer 'w' might be an indenting writer, so to not get extra unwanted extra whitespaces, we write the
-		// complete event to a buffer and then write the buffer to the writer.
-		buf := new(bytes.Buffer)
 		depth := depths.GetOrSet(event.QueryID, event.ParentID)
+		row := traceRow{}
+
 		if opts.Locations {
 			location := formatLocation(event, filePathAliases)
-			_, _ = fmt.Fprintf(buf, "%-*s ", locationWidth, location)
+			row.add(location)
 		}
-		_, _ = fmt.Fprint(buf, formatEvent(event, depth))
-		if opts.LocalVariables {
-			_, _ = fmt.Fprintf(buf, " %v", exprLocalVars(event))
-		}
+
+		row.add(formatEvent(event, depth))
+
 		if opts.ExprVariables {
-			vars := ast.NewValueMap()
-			ast.WalkTerms(event.Node, func(term *ast.Term) bool {
-				// We walk the terms in the evaluated node
-				if term.Location == nil {
-					return false
-				}
-				if v, ok := term.Value.(ast.Var); ok {
-					meta, ok := event.LocalMetadata[v]
-					if !ok {
-						return false
-					}
-					val := event.Locals.Get(v)
-					vars.Put(meta.Name, val)
-				}
-				return false
-			})
-			_, _ = fmt.Fprintf(buf, " %v", vars)
+			row.add(fmt.Sprint(exprLocalVars(event)))
 		}
-		_, _ = fmt.Fprintln(w, buf.String())
+
+		if opts.LocalVariables {
+			if locals := event.Locals; locals != nil {
+				row.add(locals.String())
+			} else {
+				row.add("{}")
+			}
+		}
+
+		table.add(row)
 	}
+
+	table.write(w, columnPadding)
 }
 
 func exprLocalVars(e *Event) *ast.ValueMap {
@@ -318,47 +346,12 @@ func exprLocalVars(e *Event) *ast.ValueMap {
 	}
 
 	if r, ok := e.Node.(*ast.Rule); ok {
-		//fmt.Printf("rule: %v\n", r.Ref())
+		// We're only interested in vars in the head, not the body
 		ast.WalkTerms(r.Head, findVars)
 		return vars
 	}
 
 	ast.WalkTerms(e.Node, findVars)
-
-	//findVars := func(term *ast.Term) bool {
-	//	if name, ok := term.Value.(ast.Var); ok {
-	//		if val := e.Locals.Get(name); val != nil {
-	//			if meta, ok := e.LocalMetadata[name]; ok {
-	//				name = meta.Name
-	//			}
-	//			vars.Put(name, val)
-	//		} else {
-	//			if meta, ok := e.LocalMetadata[name]; ok {
-	//				name = meta.Name
-	//			}
-	//			vars.Put(name, ast.Null{})
-	//		}
-	//	}
-	//	return false
-	//}
-	//
-	//ast.WalkExprs(e.Node, func(expr *ast.Expr) bool {
-	//	if expr.IsCall() {
-	//		ast.WalkTerms(expr.Operands(), findVars)
-	//	} else {
-	//		ast.WalkTerms(expr.Terms, findVars)
-	//	}
-	//	return false
-	//})
-
-	//e.Locals.Iter(func(k, v ast.Value) bool {
-	//	name := k.(ast.Var)
-	//	if meta, ok := e.LocalMetadata[name]; ok {
-	//		vars.Put(meta.Name, v)
-	//	}
-	//
-	//	return false
-	//})
 
 	return vars
 }

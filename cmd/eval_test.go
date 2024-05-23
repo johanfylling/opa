@@ -1211,16 +1211,18 @@ func TestEvalDebugTraceJSONOutput(t *testing.T) {
 	}
 }
 
-func TestEvalPrettyTraceWithVars(t *testing.T) {
+func TestEvalPrettyTrace(t *testing.T) {
 	tests := []struct {
-		note     string
-		query    string
-		files    map[string]string
-		expected string
+		note        string
+		query       string
+		includeVars bool
+		files       map[string]string
+		expected    string
 	}{
 		{
-			note:  "simple",
-			query: "data.test.p",
+			note:        "simple without vars",
+			query:       "data.test.p",
+			includeVars: false,
 			files: map[string]string{
 				"test.rego": `package test
 import rego.v1
@@ -1234,25 +1236,64 @@ p if {
 `,
 			},
 			expected: `%SKIP_LINE%
-query:1 %.*%         Enter data.test.p = _ {}
-query:1 %.*%         | Eval data.test.p = _ {}
-query:1 %.*%         | Index data.test.p (matched 1 rule, early exit) {}
-%.*%/test.rego:4     | Enter data.test.p {}
-%.*%/test.rego:5     | | Eval x = 1 {}
-%.*%/test.rego:6     | | Eval y = 2 {}
-%.*%/test.rego:7     | | Eval z = 3 {}
-%.*%/test.rego:8     | | Eval minus(z, y, __local3__) {z: 3, y: 2}
-%.*%/test.rego:8     | | Eval x = __local3__ {x: 1, __local3__: 1}
-%.*%/test.rego:4     | | Exit data.test.p early {}
-query:1 %.*%         | Exit data.test.p = _ {_: true}
-query:1 %.*%         Redo data.test.p = _ {_: true}
-query:1 %.*%         | Redo data.test.p = _ {_: true}
-%.*%/test.rego:4     | Redo data.test.p {}
-%.*%/test.rego:8     | | Redo x = __local3__ {x: 1, __local3__: 1}
-%.*%/test.rego:8     | | Redo minus(z, y, __local3__) {z: 3, y: 2, __local3__: 1}
-%.*%/test.rego:7     | | Redo z = 3 {z: 3}
-%.*%/test.rego:6     | | Redo y = 2 {y: 2}
-%.*%/test.rego:5     | | Redo x = 1 {x: 1}
+query:1 %.*%         Enter data.test.p = _
+query:1 %.*%         | Eval data.test.p = _
+query:1 %.*%         | Index data.test.p (matched 1 rule, early exit)
+%.*%/test.rego:4     | Enter data.test.p
+%.*%/test.rego:5     | | Eval x = 1
+%.*%/test.rego:6     | | Eval y = 2
+%.*%/test.rego:7     | | Eval z = 3
+%.*%/test.rego:8     | | Eval minus(z, y, __local3__)
+%.*%/test.rego:8     | | Eval x = __local3__
+%.*%/test.rego:4     | | Exit data.test.p early
+query:1 %.*%         | Exit data.test.p = _
+query:1 %.*%         Redo data.test.p = _
+query:1 %.*%         | Redo data.test.p = _
+%.*%/test.rego:4     | Redo data.test.p
+%.*%/test.rego:8     | | Redo x = __local3__
+%.*%/test.rego:8     | | Redo minus(z, y, __local3__)
+%.*%/test.rego:7     | | Redo z = 3
+%.*%/test.rego:6     | | Redo y = 2
+%.*%/test.rego:5     | | Redo x = 1
+true
+`,
+		},
+		{
+			note:        "simple with vars",
+			query:       "data.test.p",
+			includeVars: true,
+			files: map[string]string{
+				"test.rego": `package test
+import rego.v1
+
+p if {
+	x := 1
+	y := 2
+	z := 3
+	x == z - y
+} 
+`,
+			},
+			expected: `%SKIP_LINE%
+query:1 %.*%         Enter data.test.p = _                                {}
+query:1 %.*%         | Eval data.test.p = _                               {}
+query:1 %.*%         | Index data.test.p (matched 1 rule, early exit)     {}
+%.*%/test.rego:4     | Enter data.test.p                                  {}
+%.*%/test.rego:5     | | Eval x = 1                                       {}
+%.*%/test.rego:6     | | Eval y = 2                                       {}
+%.*%/test.rego:7     | | Eval z = 3                                       {}
+%.*%/test.rego:8     | | Eval minus(z, y, __local3__)                     {z: 3, y: 2}
+%.*%/test.rego:8     | | Eval x = __local3__                              {x: 1, __local3__: 1}
+%.*%/test.rego:4     | | Exit data.test.p early                           {}
+query:1 %.*%         | Exit data.test.p = _                               {_: true}
+query:1 %.*%         Redo data.test.p = _                                 {_: true}
+query:1 %.*%         | Redo data.test.p = _                               {_: true}
+%.*%/test.rego:4     | Redo data.test.p                                   {}
+%.*%/test.rego:8     | | Redo x = __local3__                              {x: 1, __local3__: 1}
+%.*%/test.rego:8     | | Redo minus(z, y, __local3__)                     {z: 3, y: 2, __local3__: 1}
+%.*%/test.rego:7     | | Redo z = 3                                       {z: 3}
+%.*%/test.rego:6     | | Redo y = 2                                       {y: 2}
+%.*%/test.rego:5     | | Redo x = 1                                       {x: 1}
 true
 `,
 		},
@@ -1267,7 +1308,7 @@ true
 				_ = params.dataPaths.Set(path)
 				_ = params.outputFormat.Set(evalPrettyOutput)
 				_ = params.explain.Set(explainModeFull)
-				params.traceVarValues = true
+				params.traceVarValues = tc.includeVars
 				params.disableIndexing = true
 
 				_, err := eval([]string{tc.query}, params, &buf)

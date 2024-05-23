@@ -401,8 +401,8 @@ func eval(args []string, params evalCommandParams, w io.Writer) (bool, error) {
 	case evalPrettyOutput:
 		err = pr.PrettyWithOptions(w, result, pr.PrettyOptions{
 			TraceOpts: topdown.PrettyTraceOptions{
-				Locations:      true,
-				LocalVariables: ectx.params.traceVarValues,
+				Locations:     true,
+				ExprVariables: ectx.params.traceVarValues,
 			},
 		})
 	case evalSourceOutput:
