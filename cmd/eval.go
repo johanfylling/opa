@@ -72,6 +72,7 @@ type evalCommandParams struct {
 	entrypoints         repeatedStringFlag
 	strict              bool
 	v1Compatible        bool
+	traceVarValues      bool
 }
 
 func newEvalCommandParams() evalCommandParams {
@@ -398,7 +399,12 @@ func eval(args []string, params evalCommandParams, w io.Writer) (bool, error) {
 	case evalValuesOutput:
 		err = pr.Values(w, result)
 	case evalPrettyOutput:
-		err = pr.Pretty(w, result)
+		err = pr.PrettyWithOptions(w, result, pr.PrettyOptions{
+			TraceOpts: topdown.PrettyTraceOptions{
+				Locations:      true,
+				LocalVariables: ectx.params.traceVarValues,
+			},
+		})
 	case evalSourceOutput:
 		err = pr.Source(w, result)
 	case evalRawOutput:

@@ -1211,6 +1211,123 @@ func TestEvalDebugTraceJSONOutput(t *testing.T) {
 	}
 }
 
+func TestEvalPrettyTraceWithVars(t *testing.T) {
+	tests := []struct {
+		note     string
+		query    string
+		files    map[string]string
+		expected string
+	}{
+		{
+			note:  "simple",
+			query: "data.test.p",
+			files: map[string]string{
+				"test.rego": `package test
+import rego.v1
+
+p if {
+	x := 1
+	y := 2
+	z := 3
+	x == z - y
+} 
+`,
+			},
+			expected: `%SKIP_LINE%
+query:1 %.*%         Enter data.test.p = _ {}
+query:1 %.*%         | Eval data.test.p = _ {}
+query:1 %.*%         | Index data.test.p (matched 1 rule, early exit) {}
+%.*%/test.rego:4     | Enter data.test.p {}
+%.*%/test.rego:5     | | Eval x = 1 {}
+%.*%/test.rego:6     | | Eval y = 2 {}
+%.*%/test.rego:7     | | Eval z = 3 {}
+%.*%/test.rego:8     | | Eval minus(z, y, __local3__) {z: 3, y: 2}
+%.*%/test.rego:8     | | Eval x = __local3__ {x: 1, __local3__: 1}
+%.*%/test.rego:4     | | Exit data.test.p early {}
+query:1 %.*%         | Exit data.test.p = _ {_: true}
+query:1 %.*%         Redo data.test.p = _ {_: true}
+query:1 %.*%         | Redo data.test.p = _ {_: true}
+%.*%/test.rego:4     | Redo data.test.p {}
+%.*%/test.rego:8     | | Redo x = __local3__ {x: 1, __local3__: 1}
+%.*%/test.rego:8     | | Redo minus(z, y, __local3__) {z: 3, y: 2, __local3__: 1}
+%.*%/test.rego:7     | | Redo z = 3 {z: 3}
+%.*%/test.rego:6     | | Redo y = 2 {y: 2}
+%.*%/test.rego:5     | | Redo x = 1 {x: 1}
+true
+`,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.note, func(t *testing.T) {
+			var buf bytes.Buffer
+
+			test.WithTempFS(tc.files, func(path string) {
+				params := newEvalCommandParams()
+				_ = params.dataPaths.Set(path)
+				_ = params.outputFormat.Set(evalPrettyOutput)
+				_ = params.explain.Set(explainModeFull)
+				params.traceVarValues = true
+				params.disableIndexing = true
+
+				_, err := eval([]string{tc.query}, params, &buf)
+				if err != nil {
+					t.Fatalf("Unexpected error: %s\n\n%s", err, buf.String())
+				}
+			})
+
+			actual := buf.String()
+			if !stringsMatch(t, tc.expected, actual) {
+				t.Fatalf("Expected:\n\n%v\n\nGot:\n\n%v", tc.expected, actual)
+			}
+		})
+	}
+}
+
+func stringsMatch(t *testing.T, expected, actual string) bool {
+	t.Helper()
+
+	var expectedLines []string
+	for _, l := range strings.Split(expected, "\n") {
+		if !strings.Contains(l, "%SKIP_LINE%") {
+			expectedLines = append(expectedLines, l)
+		}
+	}
+
+	actualLines := strings.Split(actual, "\n")
+
+	if len(expectedLines) != len(actualLines) {
+		t.Errorf("Expected %d lines but got %d", len(expectedLines), len(actualLines))
+		return false
+	}
+
+	for i, expectedLine := range expectedLines {
+		actualLine := actualLines[i]
+
+		expectedParts := strings.Split(expectedLine, "%.*%")
+		if len(expectedParts) == 1 {
+			if expectedLine != actualLine {
+				t.Errorf("Mismatch on line %d. Expected:\n\n%s\n\nGot:\n\n%s", i, expectedLine, actualLine)
+				return false
+			}
+		} else if len(expectedParts) == 2 {
+			if !strings.HasPrefix(actualLine, expectedParts[0]) {
+				t.Errorf("Expected line %d to start with:\n\n%s\n\nbut got:\n\n%s", i, expectedParts[0], actualLine)
+				return false
+			}
+			if !strings.HasSuffix(actualLine, expectedParts[1]) {
+				t.Errorf("Expected line %d to end with:\n\n%s\n\nbut got:\n\n%s", i, expectedParts[1], actualLine)
+				return false
+			}
+		} else {
+			t.Fatalf("At most one .* is allowed per line but found %d on line %d:\n\n%s", len(expectedParts)-1, i, expectedLine)
+			return false
+		}
+	}
+
+	return true
+}
+
 func TestResetExprLocations(t *testing.T) {
 
 	// Make sure no panic if passed nil.

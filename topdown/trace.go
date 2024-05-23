@@ -239,22 +239,22 @@ func (b *BufferTracer) Config() TraceConfig {
 
 // PrettyTrace pretty prints the trace to the writer.
 func PrettyTrace(w io.Writer, trace []*Event) {
-	PrettyTraceWithOpts(w, trace, TraceOptions{})
+	PrettyTraceWithOpts(w, trace, PrettyTraceOptions{})
 }
 
 // PrettyTraceWithLocation prints the trace to the writer and includes location information
 func PrettyTraceWithLocation(w io.Writer, trace []*Event) {
-	PrettyTraceWithOpts(w, trace, TraceOptions{Locations: true})
+	PrettyTraceWithOpts(w, trace, PrettyTraceOptions{Locations: true})
 }
 
-type TraceOptions struct {
+type PrettyTraceOptions struct {
 	Locations      bool
 	ExprVariables  bool
 	LocalVariables bool
 	//LocationVars   bool
 }
 
-func PrettyTraceWithOpts(w io.Writer, trace []*Event, opts TraceOptions) {
+func PrettyTraceWithOpts(w io.Writer, trace []*Event, opts PrettyTraceOptions) {
 	depths := depths{}
 
 	filePathAliases, longest := getShortenedFileNames(trace)
@@ -273,7 +273,7 @@ func PrettyTraceWithOpts(w io.Writer, trace []*Event, opts TraceOptions) {
 		}
 		_, _ = fmt.Fprint(buf, formatEvent(event, depth))
 		if opts.LocalVariables {
-			_, _ = fmt.Fprintf(buf, " %v", event.Locals)
+			_, _ = fmt.Fprintf(buf, " %v", exprLocalVars(event))
 		}
 		if opts.ExprVariables {
 			vars := ast.NewValueMap()
@@ -296,6 +296,71 @@ func PrettyTraceWithOpts(w io.Writer, trace []*Event, opts TraceOptions) {
 		}
 		_, _ = fmt.Fprintln(w, buf.String())
 	}
+}
+
+func exprLocalVars(e *Event) *ast.ValueMap {
+	vars := ast.NewValueMap()
+
+	findVars := func(term *ast.Term) bool {
+		//if r, ok := term.Value.(ast.Ref); ok {
+		//	fmt.Printf("ref: %v\n", r)
+		//	//return true
+		//}
+		if name, ok := term.Value.(ast.Var); ok {
+			if meta, ok := e.LocalMetadata[name]; ok {
+				if val := e.Locals.Get(name); val != nil {
+					vars.Put(meta.Name, val)
+				}
+			}
+
+		}
+		return false
+	}
+
+	if r, ok := e.Node.(*ast.Rule); ok {
+		//fmt.Printf("rule: %v\n", r.Ref())
+		ast.WalkTerms(r.Head, findVars)
+		return vars
+	}
+
+	ast.WalkTerms(e.Node, findVars)
+
+	//findVars := func(term *ast.Term) bool {
+	//	if name, ok := term.Value.(ast.Var); ok {
+	//		if val := e.Locals.Get(name); val != nil {
+	//			if meta, ok := e.LocalMetadata[name]; ok {
+	//				name = meta.Name
+	//			}
+	//			vars.Put(name, val)
+	//		} else {
+	//			if meta, ok := e.LocalMetadata[name]; ok {
+	//				name = meta.Name
+	//			}
+	//			vars.Put(name, ast.Null{})
+	//		}
+	//	}
+	//	return false
+	//}
+	//
+	//ast.WalkExprs(e.Node, func(expr *ast.Expr) bool {
+	//	if expr.IsCall() {
+	//		ast.WalkTerms(expr.Operands(), findVars)
+	//	} else {
+	//		ast.WalkTerms(expr.Terms, findVars)
+	//	}
+	//	return false
+	//})
+
+	//e.Locals.Iter(func(k, v ast.Value) bool {
+	//	name := k.(ast.Var)
+	//	if meta, ok := e.LocalMetadata[name]; ok {
+	//		vars.Put(meta.Name, v)
+	//	}
+	//
+	//	return false
+	//})
+
+	return vars
 }
 
 func formatEvent(event *Event, depth int) string {
