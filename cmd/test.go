@@ -415,6 +415,7 @@ func compileAndSetupTests(ctx context.Context, testParams testCommandParams, sto
 				BenchMarkShowAllocations: testParams.benchMem,
 				BenchMarkGoBenchFormat:   goBench,
 				FailureLine:              testParams.varValues,
+				LocalVars:                testParams.varValues,
 			}
 		}
 	} else {

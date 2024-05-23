@@ -635,8 +635,21 @@ func printArrows(w *bytes.Buffer, l []varInfo, printValueAt int) {
 			spaces = (col - prevCol) - 1
 		}
 
-		if spaces > 0 {
-			w.WriteString(strings.Repeat(" ", spaces))
+		//if spaces > 0 {
+		//	w.WriteString(strings.Repeat(" ", spaces))
+		//}
+		for j := 0; j < spaces; j++ {
+			tab := false
+			for _, t := range info.exprLoc.Tabs {
+				if t == j+prevCol+1 {
+					w.WriteString("\t")
+					tab = true
+					break
+				}
+			}
+			if !tab {
+				w.WriteString(" ")
+			}
 		}
 
 		if isLast && printValueAt >= 0 {

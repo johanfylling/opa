@@ -1300,6 +1300,10 @@ func removeUnifyOps(trace []*Event) (result []*Event) {
 	return
 }
 
+func TestPrettyTraceWithLocalVars(t *testing.T) {
+
+}
+
 func TestPrettyEvent(t *testing.T) {
 	tests := []struct {
 		note     string

@@ -221,6 +221,110 @@ func failTrace(t *testing.T) []*topdown.Event {
 	return *tracer
 }
 
+//func TestResultTraceVars(t *testing.T) {
+//	tests := []struct {
+//		note     string
+//		files    map[string]string
+//		expected string
+//	}{
+//		{
+//			note: "simple",
+//			files: map[string]string{
+//				"/test.rego": `package test
+//import rego.v1
+//
+//test_foo if {
+//	x := 1
+//	y := 2
+//	z := 3
+//	x == y + z
+//}
+//`,
+//			},
+//			expected: `FAILURES
+//--------------------------------------------------------------------------------
+//data.test.test_foo: FAIL (%TIME%)
+//
+//  query:1                                                              Enter data.test.test_foo = _ {}
+//  query:1                                                              | Eval data.test.test_foo = _ {}
+//  query:1                                                              | Index data.test.test_foo (matched 1 rule, early exit) {}
+//  %ROOT%/test.rego:4     | Enter data.test.test_foo {}
+//  %ROOT%/test.rego:5     | | Eval x = 1 {}
+//  %ROOT%/test.rego:6     | | Eval y = 2 {}
+//  %ROOT%/test.rego:7     | | Eval z = 3 {}
+//  %ROOT%/test.rego:8     | | Eval plus(y, z, __local3__) {y: 2, z: 3}
+//  %ROOT%/test.rego:8     | | Eval x = __local3__ {x: 1, __local3__: 5}
+//  %ROOT%/test.rego:8     | | Fail x = __local3__ {x: 1, __local3__: 5}
+//  %ROOT%/test.rego:8     | | Redo plus(y, z, __local3__) {y: 2, z: 3, __local3__: 5}
+//  %ROOT%/test.rego:7     | | Redo z = 3 {z: 3}
+//  %ROOT%/test.rego:6     | | Redo y = 2 {y: 2}
+//  %ROOT%/test.rego:5     | | Redo x = 1 {x: 1}
+//  query:1`,
+//		},
+//		{
+//			note: "ref to local var",
+//			files: map[string]string{
+//				"/test.rego": `package test
+//import rego.v1
+//
+//test_foo if {
+//	obj := {"foo": 1}
+//	obj.foo == 2
+//}`,
+//			},
+//			expected: ``,
+//		},
+//		{
+//			note: "ref (with var) to local var",
+//			files: map[string]string{
+//				"/test.rego": `package test
+//import rego.v1
+//
+//test_foo if {
+//	obj := {
+//		"foo": {
+//			"bar": 1,
+//		}
+//	}
+//	some x
+//	obj[x].bar == 2
+//}`,
+//			},
+//			expected: ``,
+//		},
+//	}
+//
+//	r := regexp.MustCompile(`FAIL \(.*s\)`)
+//	for _, tc := range tests {
+//		t.Run(tc.note, func(t *testing.T) {
+//			test.WithTempFS(tc.files, func(root string) {
+//				buf := new(bytes.Buffer)
+//				testParams := newTestCommandParams()
+//				testParams.count = 1
+//				testParams.output = buf
+//				testParams.errOutput = io.Discard
+//				testParams.bundleMode = false
+//				_ = testParams.explain.Set(explainModeFull)
+//				testParams.verbose = true
+//				testParams.varValues = true
+//
+//				_, err := opaTest([]string{root}, testParams)
+//				if err != nil {
+//					t.Fatalf("Unexpected error: %s", err)
+//				}
+//
+//				actual := r.ReplaceAllString(buf.String(), "FAIL (%TIME%)")
+//				expected := strings.ReplaceAll(tc.expected, "%ROOT%", root)
+//
+//				//if !strings.Contains(actual, expected) {
+//				if !strings.HasPrefix(actual, expected) {
+//					t.Fatalf("Expected output to start with:\n\n%s\n\ngot:\n\n%s", expected, actual)
+//				}
+//			})
+//		})
+//	}
+//}
+
 func TestFailVarValues(t *testing.T) {
 	tests := []struct {
 		note     string
@@ -230,9 +334,7 @@ func TestFailVarValues(t *testing.T) {
 		{
 			note: "simple",
 			files: map[string]string{
-				"/test.rego": `
-	package test
-
+				"/test.rego": `package test
 	import rego.v1
 
 	test_foo if {
@@ -245,12 +347,130 @@ func TestFailVarValues(t *testing.T) {
 			},
 			expected: `%ROOT%/test.rego:
 data.test.test_foo: FAIL (%TIME%)
-  On row 10:
+  On row 8:
     x == y + z
     |    |   |
     |    |   3
     |    2
     1
+--------------------------------------------------------------------------------
+FAIL: 1/1
+`,
+		},
+		{
+			note: "array",
+			files: map[string]string{
+				"/test.rego": `package test
+	import rego.v1
+
+	test_foo if {
+		x := 1
+		y := [1, 2, 3]
+		z := 3
+		x == y[2] + z
+	}
+`,
+			},
+			expected: `%ROOT%/test.rego:
+data.test.test_foo: FAIL (%TIME%)
+  On row 8:
+    x == y[2] + z
+    |    |      |
+    |    |      3
+    |    [1, 2, 3]
+    1
+--------------------------------------------------------------------------------
+FAIL: 1/1
+`,
+		},
+		{
+			note: "single line expression containing tabs",
+			files: map[string]string{
+				"/test.rego": `package test
+	import rego.v1
+
+	test_foo if {
+		x := 1
+		y := 2
+		z := 3
+		x == y +	z
+	}
+`,
+			},
+			expected: `%ROOT%/test.rego:
+data.test.test_foo: FAIL (%TIME%)
+  On row 8:
+    x == y +	z
+    |    |  	|
+    |    |  	3
+    |    2
+    1
+--------------------------------------------------------------------------------
+FAIL: 1/1
+`,
+		},
+		{
+			note: "single line expression containing tabs #2",
+			files: map[string]string{
+				"/test.rego": `package test
+	import rego.v1
+
+	test_foo if {
+		x := 1
+		y := 2
+		z := 3
+		x	== y +	z
+	}
+`,
+			},
+			expected: `%ROOT%/test.rego:
+data.test.test_foo: FAIL (%TIME%)
+  On row 8:
+    x	== y +	z
+    |	   |  	|
+    |	   |  	3
+    |	   2
+    1
+--------------------------------------------------------------------------------
+FAIL: 1/1
+`,
+		},
+		{
+			note: "multi-line expression containing tabs",
+			files: map[string]string{
+				"/test.rego": `package test
+	import rego.v1
+
+	test_foo if {
+		x := 1
+		y := 2
+		z := 3
+		obj := {
+			"foo_": 1,
+			"bar__": 42,
+			"baz": 3,
+		}
+		obj == {
+			"foo_":		x,
+			"bar__":	y,
+			"baz":		z,
+		}
+	}
+`,
+			},
+			expected: `%ROOT%/test.rego:
+data.test.test_foo: FAIL (%TIME%)
+  On row 15:
+    obj == {
+    	"foo_":		x,
+    	"bar__":	y,
+    	"baz":		z,
+    }
+    |	       		|
+    |	       		x: 1
+    |	        	y: 2
+    |	      		z: 3
+    {"bar__": 42, "baz": 3, "foo_": 1}
 --------------------------------------------------------------------------------
 FAIL: 1/1
 `,
@@ -350,6 +570,8 @@ test_foo if {
 				testParams.errOutput = io.Discard
 				testParams.bundleMode = false
 				testParams.varValues = true
+				//testParams.verbose = true
+				//_ = testParams.explain.Set(explainModeFull)
 
 				_, err := opaTest([]string{root}, testParams)
 				if err != nil {
