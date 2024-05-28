@@ -21,6 +21,8 @@ const (
 	minLocationWidth      = 5 // len("query")
 	maxIdealLocationWidth = 64
 	columnPadding         = 4
+	maxExprVarWidth       = 32
+	maxPrettyExprVarWidth = 64
 )
 
 // Op defines the types of tracing events.
@@ -711,10 +713,11 @@ func printArrows(w *bytes.Buffer, l []varInfo, printValueAt int) {
 		}
 
 		if isLast && printValueAt >= 0 {
+			valueStr := iStrs.Truncate(info.Value(), maxPrettyExprVarWidth)
 			if (i > 0 && col == l[i-1].col) || (i < len(l)-1 && col == l[i+1].col) {
-				w.WriteString(fmt.Sprintf("%s: %s", info.Name, info.Value()))
+				w.WriteString(fmt.Sprintf("%s: %s", info.Name, valueStr))
 			} else {
-				w.WriteString(info.Value())
+				w.WriteString(valueStr)
 			}
 		} else {
 			w.WriteString("|")
