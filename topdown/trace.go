@@ -311,7 +311,19 @@ func PrettyTraceWithOpts(w io.Writer, trace []*Event, opts PrettyTraceOptions) {
 		row.add(formatEvent(event, depth))
 
 		if opts.ExprVariables {
-			row.add(fmt.Sprint(exprLocalVars(event)))
+			vars := exprLocalVars(event)
+			keys := sortedKeys(vars)
+
+			buf := new(bytes.Buffer)
+			buf.WriteString("{")
+			for i, k := range keys {
+				if i > 0 {
+					buf.WriteString(", ")
+				}
+				_, _ = fmt.Fprintf(buf, "%v: %s", k, iStrs.Truncate(vars.Get(k).String(), maxExprVarWidth))
+			}
+			buf.WriteString("}")
+			row.add(buf.String())
 		}
 
 		if opts.LocalVariables {
@@ -326,6 +338,18 @@ func PrettyTraceWithOpts(w io.Writer, trace []*Event, opts PrettyTraceOptions) {
 	}
 
 	table.write(w, columnPadding)
+}
+
+func sortedKeys(vm *ast.ValueMap) []ast.Value {
+	keys := make([]ast.Value, 0, vm.Len())
+	vm.Iter(func(k, _ ast.Value) bool {
+		keys = append(keys, k)
+		return false
+	})
+	slices.SortFunc(keys, func(a, b ast.Value) int {
+		return strings.Compare(a.String(), b.String())
+	})
+	return keys
 }
 
 func exprLocalVars(e *Event) *ast.ValueMap {
