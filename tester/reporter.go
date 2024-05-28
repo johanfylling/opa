@@ -28,6 +28,7 @@ type PrettyReporter struct {
 	Output                   io.Writer
 	Verbose                  bool
 	FailureLine              bool
+	LocalVars                bool
 	BenchmarkResults         bool
 	BenchMarkShowAllocations bool
 	BenchMarkGoBenchFormat   bool
@@ -62,7 +63,10 @@ func (r PrettyReporter) Report(ch chan *Result) error {
 		for _, failure := range failures {
 			fmt.Fprintln(r.Output, failure)
 			fmt.Fprintln(r.Output)
-			topdown.PrettyTraceWithLocation(newIndentingWriter(r.Output), failure.Trace)
+			topdown.PrettyTraceWithOpts(newIndentingWriter(r.Output), failure.Trace, topdown.PrettyTraceOptions{
+				Locations:     true,
+				ExprVariables: r.LocalVars,
+			})
 			fmt.Fprintln(r.Output)
 		}
 
@@ -100,6 +104,7 @@ func (r PrettyReporter) Report(ch chan *Result) error {
 						if err := topdown.PrettyEvent(newIndentingWriter(r.Output, 4), e, topdown.PrettyEventOpts{PrettyVars: true}); err != nil {
 							return err
 						}
+						_, _ = fmt.Fprintln(r.Output)
 						break
 					}
 				}

@@ -654,7 +654,7 @@ func PrettyEvent(w io.Writer, e *Event, opts PrettyEventOpts) error {
 		return false
 	})
 
-	printPrettyVars(buf, exprVars, "")
+	printPrettyVars(buf, exprVars)
 	_, _ = fmt.Fprint(w, buf.String())
 	return nil
 }
@@ -668,7 +668,37 @@ func reverseLookupInMeta(meta map[ast.Var]VarMetadata, name ast.Var) (ast.Var, V
 	return "", VarMetadata{}, false
 }
 
-func printPrettyVars(w *bytes.Buffer, exprVars map[string]varInfo, prefix string) {
+func printPrettyVars(w *bytes.Buffer, exprVars map[string]varInfo) {
+	w.WriteString("\n")
+
+	containsTabs := false
+	varRows := make(map[int]interface{})
+	for _, info := range exprVars {
+		if len(info.exprLoc.Tabs) > 0 {
+			containsTabs = true
+		}
+		varRows[info.exprLoc.Row] = nil
+	}
+
+	if containsTabs && len(varRows) > 1 {
+		// We can't - currently - reliably point to var locations when they are on different rows that contain tabs.
+		// So we'll just print them in alphabetical order instead.
+		byName := make([]varInfo, 0, len(exprVars))
+		for _, info := range exprVars {
+			byName = append(byName, info)
+		}
+		slices.SortFunc(byName, func(a, b varInfo) int {
+			return strings.Compare(a.Name.String(), b.Name.String())
+		})
+
+		w.WriteString("\nWhere:\n")
+		for _, info := range byName {
+			w.WriteString(fmt.Sprintf("\n%s: %s", info.Name, iStrs.Truncate(info.Value(), maxPrettyExprVarWidth)))
+		}
+
+		return
+	}
+
 	byCol := make([]varInfo, 0, len(exprVars))
 	for _, info := range exprVars {
 		byCol = append(byCol, info)
@@ -685,12 +715,9 @@ func printPrettyVars(w *bytes.Buffer, exprVars map[string]varInfo, prefix string
 		return
 	}
 
-	w.WriteString("\n")
-	w.WriteString(prefix)
 	printArrows(w, byCol, -1)
 	for i := len(byCol) - 1; i >= 0; i-- {
 		w.WriteString("\n")
-		w.WriteString(prefix)
 		printArrows(w, byCol, i)
 	}
 }

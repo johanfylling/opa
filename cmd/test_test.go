@@ -458,19 +458,22 @@ FAIL: 1/1
 	}
 `,
 			},
+			// We can't deal with tabs in a consistent manner when they occur on multiple lines
 			expected: `%ROOT%/test.rego:
 data.test.test_foo: FAIL (%TIME%)
-  On row 15:
+  On row 13:
     obj == {
     	"foo_":		x,
     	"bar__":	y,
     	"baz":		z,
     }
-    |	       		|
-    |	       		x: 1
-    |	        	y: 2
-    |	      		z: 3
-    {"bar__": 42, "baz": 3, "foo_": 1}
+    
+    Where:
+    
+    obj: {"bar__": 42, "baz": 3, "foo_": 1}
+    x: 1
+    y: 2
+    z: 3
 --------------------------------------------------------------------------------
 FAIL: 1/1
 `,
@@ -478,7 +481,7 @@ FAIL: 1/1
 
 		// FIXME: Requires inspection of cache
 		{
-			note: "rule defined",
+			note: "rule not defined",
 			files: map[string]string{
 				"/test.rego": `package test
 import rego.v1
@@ -502,7 +505,7 @@ FAIL: 1/1
 `,
 		},
 		{
-			note: "rule not defined",
+			note: "rule defined",
 			files: map[string]string{
 				"/test.rego": `package test
 import rego.v1
