@@ -444,6 +444,58 @@ FAIL: 1/1
 `,
 		},
 		{
+			note: "array containing vars",
+			files: map[string]string{
+				"/test.rego": `package test
+import rego.v1
+
+test_foo if {
+	x := 1
+	y := 2
+	z := 3
+	[x, y, z] == [4, 5, 6]
+}
+`,
+			},
+			expected: `%ROOT%/test.rego:
+data.test.test_foo: FAIL (%TIME%)
+  On row 8:
+    	[x, y, z] == [4, 5, 6]
+    	 |  |  |
+    	 |  |  3
+    	 |  2
+    	 1
+--------------------------------------------------------------------------------
+FAIL: 1/1
+`,
+		},
+		{
+			note: "nested collections containing vars",
+			files: map[string]string{
+				"/test.rego": `package test
+import rego.v1
+
+test_foo if {
+	x := 1
+	y := 2
+	z := 3
+	[x, {y, {"a": z}}] == [4, {5, {"a": 6}}]
+}
+`,
+			},
+			expected: `%ROOT%/test.rego:
+data.test.test_foo: FAIL (%TIME%)
+  On row 8:
+    	[x, {y, {"a": z}}] == [4, {5, {"a": 6}}]
+    	 |   |        |
+    	 |   |        3
+    	 |   2
+    	 1
+--------------------------------------------------------------------------------
+FAIL: 1/1
+`,
+		},
+		{
 			note: "single line expression containing tabs",
 			files: map[string]string{
 				"/test.rego": `package test
@@ -763,8 +815,8 @@ test_foo if {
 data.test.test_foo: FAIL (%TIME%)
   On row 6:
     	[x | x := l[_]] == ["d", "e", "f"]
-    	 |
-    	 ["a", "b", "c"]
+    	|
+    	["a", "b", "c"]
 --------------------------------------------------------------------------------
 FAIL: 1/1
 `,
@@ -785,8 +837,8 @@ test_foo if {
 data.test.test_foo: FAIL (%TIME%)
   On row 6:
     	{x | x := l[_]} == {"b"}
-    	 |
-    	 {"a"}
+    	|
+    	{"a"}
 --------------------------------------------------------------------------------
 FAIL: 1/1
 `,
@@ -807,8 +859,8 @@ test_foo if {
 data.test.test_foo: FAIL (%TIME%)
   On row 6:
     	{k: x | x := l[k]} == {3: "d", 4: "e", 5: "f"}
-    	 |
-    	 {0: "a", 1: "b", 2: "c"}
+    	|
+    	{0: "a", 1: "b", 2: "c"}
 --------------------------------------------------------------------------------
 FAIL: 1/1
 `,
@@ -832,6 +884,29 @@ data.test.test_foo: FAIL (%TIME%)
     		x == 1
     		|
     		2
+--------------------------------------------------------------------------------
+FAIL: 1/1
+`,
+		},
+		{
+			note: "comprehension inside every",
+			files: map[string]string{
+				"/test.rego": `package test
+import rego.v1
+
+test_foo if {
+	l := [1, 2, 3]
+	every x in l {
+		[v | v := x] == [42]
+	}
+}`,
+			},
+			expected: `%ROOT%/test.rego:
+data.test.test_foo: FAIL (%TIME%)
+  On row 7:
+    		[v | v := x] == [42]
+    		|
+    		[1]
 --------------------------------------------------------------------------------
 FAIL: 1/1
 `,

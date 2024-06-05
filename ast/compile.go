@@ -346,6 +346,7 @@ func NewCompiler() *Compiler {
 		{"CheckSafetyRuleBodies", "compile_stage_check_safety_rule_bodies", c.checkSafetyRuleBodies},
 		{"RewriteEquals", "compile_stage_rewrite_equals", c.rewriteEquals},
 		{"RewriteDynamicTerms", "compile_stage_rewrite_dynamic_terms", c.rewriteDynamicTerms},
+		{"RewriteTestRuleEqualities", "compile_stage_rewrite_test_rule_equalities", c.rewriteTestRuleEqualities}, // TODO: Should we explicitly enable this stage when running tests?
 		{"CheckRecursion", "compile_stage_check_recursion", c.checkRecursion},
 		{"CheckTypes", "compile_stage_check_types", c.checkTypes}, // must be run after CheckRecursion
 		{"CheckUnsafeBuiltins", "compile_state_check_unsafe_builtins", c.checkUnsafeBuiltins},
@@ -2162,6 +2163,25 @@ func (c *Compiler) rewriteDynamicTerms() {
 		mod := c.Modules[name]
 		WalkRules(mod, func(rule *Rule) bool {
 			rule.Body = rewriteDynamics(f, rule.Body)
+			return false
+		})
+	}
+}
+
+// rewriteDynamics rewrites equality expressions in test rule bodies to create local vars for statements that would otherwise
+// not have their values captured through tracing.
+// For example, the rule:
+//
+//	test_rule {
+//	  data.
+func (c *Compiler) rewriteTestRuleEqualities() {
+	f := newEqualityFactory(c.localvargen)
+	for _, name := range c.sorted {
+		mod := c.Modules[name]
+		WalkRules(mod, func(rule *Rule) bool {
+			if strings.HasPrefix(string(rule.Head.Name), "test_") {
+				rule.Body = rewriteTestEqualities(f, rule.Body)
+			}
 			return false
 		})
 	}
@@ -4513,6 +4533,37 @@ func rewriteEquals(x interface{}) (modified bool) {
 	})
 	_, _ = Transform(t, x) // ignore error
 	return modified
+}
+
+func rewriteTestEqualities(f *equalityFactory, body Body) Body {
+	result := make(Body, 0, len(body))
+	for _, expr := range body {
+		if !expr.Generated {
+			switch {
+			case expr.IsEquality():
+				terms := expr.Terms.([]*Term)
+				result, terms[1] = rewriteDynamicsShallow(expr, f, terms[1], result)
+				result, terms[2] = rewriteDynamicsShallow(expr, f, terms[2], result)
+			case expr.IsEvery():
+				every := expr.Terms.(*Every)
+				every.Body = rewriteTestEqualities(f, every.Body)
+			}
+		}
+		result = appendExpr(result, expr)
+	}
+	return result
+}
+
+func rewriteDynamicsShallow(original *Expr, f *equalityFactory, term *Term, result Body) (Body, *Term) {
+	switch term.Value.(type) {
+	case Ref, *ArrayComprehension, *SetComprehension, *ObjectComprehension:
+		generated := f.Generate(term)
+		generated.With = original.With
+		result.Append(generated)
+		connectGeneratedExprs(original, generated)
+		return result, result[len(result)-1].Operand(0)
+	}
+	return result, term
 }
 
 // rewriteDynamics will rewrite the body so that dynamic terms (i.e., refs and

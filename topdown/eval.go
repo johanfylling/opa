@@ -85,7 +85,6 @@ type eval struct {
 	traceEnabled           bool
 	traceLastLocation      *ast.Location // Last location of a trace event.
 	plugTraceVars          bool
-	unboundTraceVars       *ast.ValueMap // Vars with calculated values not captured in bindings or virtualCache.
 	instr                  *Instrumentation
 	builtins               map[string]*Builtin
 	builtinCache           builtins.Cache
@@ -246,18 +245,6 @@ func (e *eval) traceFailedAssertion(x ast.Node) {
 	//e.traceEvent(FailedAssertionOp, x, "", nil)
 }
 
-func (e *eval) traceVar(k, v ast.Value) {
-	// Only save trace vars if a tracer has requested to plug vars.
-	if e.plugTraceVars {
-		if e.unboundTraceVars == nil {
-			// FIXME: This is mem-costly. Drop older entries when some max limit is reached?
-			// FIXME: Can we clear this when tracing the next event?
-			e.unboundTraceVars = ast.NewValueMap()
-		}
-		e.unboundTraceVars.Put(k, v)
-	}
-}
-
 func (e *eval) traceEvent(op Op, x ast.Node, msg string, target *ast.Ref) {
 
 	if !e.traceEnabled {
@@ -326,12 +313,6 @@ func (e *eval) traceEvent(op Op, x ast.Node, msg string, target *ast.Ref) {
 				groundRef := x.GroundPrefix()
 				if v, _ := e.virtualCache.Get(groundRef); v != nil {
 					evt.LocalVirtualCacheSnapshot.Put(groundRef, v.Value)
-				} else if v := e.unboundTraceVars.Get(groundRef); v != nil {
-					evt.LocalVirtualCacheSnapshot.Put(groundRef, v)
-				}
-			case *ast.ArrayComprehension, *ast.SetComprehension, *ast.ObjectComprehension:
-				if v := e.unboundTraceVars.Get(x); v != nil {
-					evt.LocalVirtualCacheSnapshot.Put(x, v)
 				}
 			}
 			return false
@@ -1322,7 +1303,6 @@ func (e *eval) biunifyComprehensionArray(x *ast.ArrayComprehension, b *ast.Term,
 	if err != nil {
 		return err
 	}
-	e.traceVar(x, result)
 	return e.biunify(ast.NewTerm(result), b, b1, b2, iter)
 }
 
@@ -1336,7 +1316,6 @@ func (e *eval) biunifyComprehensionSet(x *ast.SetComprehension, b *ast.Term, b1,
 	if err != nil {
 		return err
 	}
-	e.traceVar(x, result)
 	return e.biunify(ast.NewTerm(result), b, b1, b2, iter)
 }
 
@@ -1356,7 +1335,6 @@ func (e *eval) biunifyComprehensionObject(x *ast.ObjectComprehension, b *ast.Ter
 	if err != nil {
 		return err
 	}
-	e.traceVar(x, result)
 	return e.biunify(ast.NewTerm(result), b, b1, b2, iter)
 }
 
@@ -2169,9 +2147,6 @@ func (e evalTree) finish(iter unifyIterator) error {
 	if err != nil || v == nil {
 		return err
 	}
-
-	// FIXME: Only trace vars on biunify fail?
-	e.e.traceVar(e.plugged, v.Value)
 
 	return e.e.biunify(e.rterm, v, e.rbindings, e.bindings, iter)
 }
