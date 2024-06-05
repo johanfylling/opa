@@ -194,6 +194,7 @@ func runTests(ctx context.Context, txn storage.Transaction, runner *tester.Runne
 					exitCode = 2
 				}
 			}
+			// FIXME: Do we need two different traces, one for verbose tracing and one for test results?
 			tr.Trace = filterTrace(&testParams, tr.Trace)
 			dup <- tr
 		}

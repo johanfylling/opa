@@ -415,10 +415,10 @@ func (s *Scanner) next() {
 		s.col = 0
 		s.tabs = []int{}
 	} else {
+		s.col++
 		if s.curr == '\t' {
 			s.tabs = append(s.tabs, s.col)
 		}
-		s.col++
 	}
 }
 

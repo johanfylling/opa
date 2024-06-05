@@ -335,24 +335,52 @@ func TestFailVarValues(t *testing.T) {
 			note: "simple",
 			files: map[string]string{
 				"/test.rego": `package test
-	import rego.v1
+import rego.v1
 
-	test_foo if {
-		x := 1
-		y := 2
-		z := 3
-		x == y + z
-	}
+test_foo if {
+	x := 1
+	y := 2
+	z := 3
+	x == y + z
+}
 `,
 			},
 			expected: `%ROOT%/test.rego:
 data.test.test_foo: FAIL (%TIME%)
   On row 8:
-    x == y + z
-    |    |   |
-    |    |   3
-    |    2
-    1
+    	x == y + z
+    	|    |   |
+    	|    |   3
+    	|    y + z: 5
+    	|    y: 2
+    	1
+--------------------------------------------------------------------------------
+FAIL: 1/1
+`,
+		},
+		{
+			note: "simple (not)",
+			files: map[string]string{
+				"/test.rego": `package test
+import rego.v1
+
+test_foo if {
+	x := 5
+	y := 2
+	z := 3
+	not x == y + z
+}
+`,
+			},
+			expected: `%ROOT%/test.rego:
+data.test.test_foo: FAIL (%TIME%)
+  On row 8:
+    	not x == y + z
+    	    |    |   |
+    	    |    |   3
+    	    |    y + z: 5
+    	    |    y: 2
+    	    5
 --------------------------------------------------------------------------------
 FAIL: 1/1
 `,
@@ -361,24 +389,56 @@ FAIL: 1/1
 			note: "array",
 			files: map[string]string{
 				"/test.rego": `package test
-	import rego.v1
+import rego.v1
 
-	test_foo if {
-		x := 1
-		y := [1, 2, 3]
-		z := 3
-		x == y[2] + z
-	}
+test_foo if {
+	x := 1
+	y := [1, 2, 3]
+	z := 3
+	x == y[2] + z
+}
 `,
 			},
 			expected: `%ROOT%/test.rego:
 data.test.test_foo: FAIL (%TIME%)
   On row 8:
-    x == y[2] + z
-    |    |      |
-    |    |      3
-    |    [1, 2, 3]
-    1
+    	x == y[2] + z
+    	|    |      |
+    	|    |      3
+    	|    y[2] + z: 6
+    	|    y[2]: 3
+    	|    y: [1, 2, 3]
+    	1
+--------------------------------------------------------------------------------
+FAIL: 1/1
+`,
+		},
+		{
+			note: "array, var key",
+			files: map[string]string{
+				"/test.rego": `package test
+import rego.v1
+
+test_foo if {
+	x := 1
+	y := [1, 2, 3]
+	z := 3
+	i := 2
+	x == y[i] + z
+}
+`,
+			},
+			expected: `%ROOT%/test.rego:
+data.test.test_foo: FAIL (%TIME%)
+  On row 9:
+    	x == y[i] + z
+    	|    | |    |
+    	|    | |    3
+    	|    | 2
+    	|    y[i] + z: 6
+    	|    y[i]: 3
+    	|    y: [1, 2, 3]
+    	1
 --------------------------------------------------------------------------------
 FAIL: 1/1
 `,
@@ -400,11 +460,12 @@ FAIL: 1/1
 			expected: `%ROOT%/test.rego:
 data.test.test_foo: FAIL (%TIME%)
   On row 8:
-    x == y +	z
-    |    |  	|
-    |    |  	3
-    |    2
-    1
+    		x == y +	z
+    		|    |  	|
+    		|    |  	3
+    		|    y +	z: 5
+    		|    y: 2
+    		1
 --------------------------------------------------------------------------------
 FAIL: 1/1
 `,
@@ -426,11 +487,12 @@ FAIL: 1/1
 			expected: `%ROOT%/test.rego:
 data.test.test_foo: FAIL (%TIME%)
   On row 8:
-    x	== y +	z
-    |	   |  	|
-    |	   |  	3
-    |	   2
-    1
+    		x	== y +	z
+    		|	   |  	|
+    		|	   |  	3
+    		|	   y +	z: 5
+    		|	   y: 2
+    		1
 --------------------------------------------------------------------------------
 FAIL: 1/1
 `,
@@ -462,11 +524,11 @@ FAIL: 1/1
 			expected: `%ROOT%/test.rego:
 data.test.test_foo: FAIL (%TIME%)
   On row 13:
-    obj == {
-    	"foo_":		x,
-    	"bar__":	y,
-    	"baz":		z,
-    }
+    		obj == {
+    			"foo_":		x,
+    			"bar__":	y,
+    			"baz":		z,
+    		}
     
     Where:
     
@@ -480,6 +542,111 @@ FAIL: 1/1
 		},
 
 		// FIXME: Requires inspection of cache
+		{
+			note: "composite rule",
+			files: map[string]string{
+				"/test.rego": `package test
+import rego.v1
+
+p contains v if {
+	some v in numbers.range(1, 3)
+}
+
+test_p if {
+	p == {4, 5, 6}
+}`,
+			},
+			expected: `%ROOT%/test.rego:
+data.test.test_p: FAIL (%TIME%)
+  On row 9:
+    	p == {4, 5, 6}
+    	|
+    	{1, 2, 3}
+--------------------------------------------------------------------------------
+FAIL: 1/1
+`,
+		},
+		{
+			note: "composite rule with ref-head",
+			files: map[string]string{
+				"/test.rego": `package test
+import rego.v1
+
+p.q contains v if {
+	some v in numbers.range(1, 3)
+}
+
+test_p if {
+	p.q == {4, 5, 6}
+}`,
+			},
+			expected: `%ROOT%/test.rego:
+data.test.test_p: FAIL (%TIME%)
+  On row 9:
+    	p.q == {4, 5, 6}
+    	|
+    	{1, 2, 3}
+--------------------------------------------------------------------------------
+FAIL: 1/1
+`,
+		},
+		{
+			note: "composite rule with ref-head, partial ref",
+			files: map[string]string{
+				"/test.rego": `package test
+import rego.v1
+
+p.q contains v if {
+	some v in numbers.range(1, 3)
+}
+
+test_p if {
+	p == {
+		"q": {4, 5, 6}
+	}
+}`,
+			},
+			expected: `%ROOT%/test.rego:
+data.test.test_p: FAIL (%TIME%)
+  On row 9:
+    	p == {
+    		"q": {4, 5, 6}
+    	}
+    	|
+    	{"q": {1, 2, 3}}
+--------------------------------------------------------------------------------
+FAIL: 1/1
+`,
+		},
+		{
+			note: "refs in different compiled sub-expressions",
+			files: map[string]string{
+				"/test.rego": `package test
+import rego.v1
+
+a := 1
+b := 2
+c := 3
+
+test_p if {
+	# This expression is split into multiple final expressions by the compiler, each containing a rule ref
+	a == b + c
+}
+`,
+			},
+			expected: `%ROOT%/test.rego:
+data.test.test_p: FAIL (%TIME%)
+  On row 10:
+    	a == b + c
+    	|    |   |
+    	|    |   3
+    	|    b + c: 5
+    	|    b: 2
+    	1
+--------------------------------------------------------------------------------
+FAIL: 1/1
+`,
+		},
 		{
 			note: "rule not defined",
 			files: map[string]string{
@@ -505,7 +672,7 @@ FAIL: 1/1
 `,
 		},
 		{
-			note: "rule defined",
+			note: "rule defined (not)",
 			files: map[string]string{
 				"/test.rego": `package test
 import rego.v1
@@ -521,10 +688,9 @@ test_p if {
 			expected: `%ROOT%/test.rego:
 data.test.test_p: FAIL (%TIME%)
   On row 9:
-    not p with input.x as 2
-    |   |
-    |   true
-    false
+    	not p with input.x as 1
+    	    |
+    	    true
 --------------------------------------------------------------------------------
 FAIL: 1/1
 `,
@@ -534,16 +700,118 @@ FAIL: 1/1
 		{
 			note: "data ref",
 			files: map[string]string{
-				"/test.rego": ``,
+				"/test.rego": `package test
+import rego.v1
+
+test_foo if {
+	y := 1
+	data.x == y
+}
+`,
+				"data.json": `{"x": 2}`,
 			},
-			expected: `%ROOT%/test.rego:`,
+			expected: `%ROOT%/test.rego:
+data.test.test_foo: FAIL (%TIME%)
+  On row 6:
+    	data.x == y
+    	|         |
+    	|         1
+    	2
+--------------------------------------------------------------------------------
+FAIL: 1/1
+`,
 		},
 		{
-			note: "comprehension",
+			note: "data + virtual extent ref",
 			files: map[string]string{
-				"/test.rego": ``,
+				"/test.rego": `package test
+import rego.v1
+
+foo.x := 1
+
+test_foo if {
+	y := {"x": 1, "y": 42}
+	foo == y
+}
+`,
+				"data.json": `{"test": {"foo": {"y": 2}}}`,
 			},
-			expected: `%ROOT%/test.rego:`,
+			expected: `%ROOT%/test.rego:
+data.test.test_foo: FAIL (%TIME%)
+  On row 8:
+    	foo == y
+    	|      |
+    	|      {"x": 1, "y": 42}
+    	{"x": 1, "y": 2}
+--------------------------------------------------------------------------------
+FAIL: 1/1
+`,
+		},
+		{
+			note: "comprehension (array)",
+			files: map[string]string{
+				"/test.rego": `package test
+import rego.v1
+
+test_foo if {
+	l := ["a", "b", "c"]
+	[x | x := l[_]] == ["d", "e", "f"]
+}
+`,
+			},
+			expected: `%ROOT%/test.rego:
+data.test.test_foo: FAIL (%TIME%)
+  On row 6:
+    	[x | x := l[_]] == ["d", "e", "f"]
+    	 |
+    	 ["a", "b", "c"]
+--------------------------------------------------------------------------------
+FAIL: 1/1
+`,
+		},
+		{
+			note: "comprehension (set)",
+			files: map[string]string{
+				"/test.rego": `package test
+import rego.v1
+
+test_foo if {
+	l := ["a"]
+	{x | x := l[_]} == {"b"}
+}
+`,
+			},
+			expected: `%ROOT%/test.rego:
+data.test.test_foo: FAIL (%TIME%)
+  On row 6:
+    	{x | x := l[_]} == {"b"}
+    	 |
+    	 {"a"}
+--------------------------------------------------------------------------------
+FAIL: 1/1
+`,
+		},
+		{
+			note: "comprehension (object)",
+			files: map[string]string{
+				"/test.rego": `package test
+import rego.v1
+
+test_foo if {
+	l := ["a", "b", "c"]
+	{k: x | x := l[k]} == {3: "d", 4: "e", 5: "f"}
+}
+`,
+			},
+			expected: `%ROOT%/test.rego:
+data.test.test_foo: FAIL (%TIME%)
+  On row 6:
+    	{k: x | x := l[k]} == {3: "d", 4: "e", 5: "f"}
+    	 |
+    	 {0: "a", 1: "b", 2: "c"}
+--------------------------------------------------------------------------------
+FAIL: 1/1
+`,
 		},
 		{
 			note: "every",
@@ -558,7 +826,15 @@ test_foo if {
 	}
 }`,
 			},
-			expected: `%ROOT%/test.rego:`,
+			expected: `%ROOT%/test.rego:
+data.test.test_foo: FAIL (%TIME%)
+  On row 7:
+    		x == 1
+    		|
+    		2
+--------------------------------------------------------------------------------
+FAIL: 1/1
+`,
 		},
 	}
 
@@ -571,8 +847,10 @@ test_foo if {
 				testParams.count = 1
 				testParams.output = buf
 				testParams.errOutput = io.Discard
-				testParams.bundleMode = false
+				testParams.bundleMode = true
 				testParams.varValues = true
+				_ = testParams.explain.Set(explainModeFull)
+
 				//testParams.verbose = true
 				//_ = testParams.explain.Set(explainModeFull)
 
@@ -585,7 +863,8 @@ test_foo if {
 				expected := strings.ReplaceAll(tc.expected, "%ROOT%", root)
 
 				//if !strings.Contains(actual, expected) {
-				if actual != expected {
+				//if actual != expected {
+				if !stringsMatch(t, expected, actual) {
 					t.Fatalf("Expected output to be:\n\n%s\n\ngot:\n\n%s", expected, actual)
 				}
 			})

@@ -99,7 +99,13 @@ func (r PrettyReporter) Report(ch chan *Result) error {
 			if r.FailureLine && tr.Location != nil {
 				for i := len(tr.Trace) - 1; i >= 0; i-- {
 					e := tr.Trace[i]
-					if e.Op == topdown.FailOp && e.Location != nil && e.Location.File != "" && !e.Location.Equal(tr.Location) {
+					if e.Op == topdown.FailOp && e.Location != nil && e.Location.File != "" {
+						if expr, isExpr := e.Node.(*ast.Expr); isExpr {
+							if _, isEvery := expr.Terms.(*ast.Every); isEvery {
+								// We're interested in the failing expression inside the every body.
+								continue
+							}
+						}
 						_, _ = fmt.Fprintf(newIndentingWriter(r.Output), "On row %d:\n", e.Location.Row)
 						if err := topdown.PrettyEvent(newIndentingWriter(r.Output, 4), e, topdown.PrettyEventOpts{PrettyVars: true}); err != nil {
 							return err

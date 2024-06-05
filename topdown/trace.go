@@ -79,15 +79,16 @@ type VarMetadata struct {
 
 // Event contains state associated with a tracing event.
 type Event struct {
-	Op            Op                      // Identifies type of event.
-	Node          ast.Node                // Contains AST node relevant to the event.
-	Location      *ast.Location           // The location of the Node this event relates to.
-	QueryID       uint64                  // Identifies the query this event belongs to.
-	ParentID      uint64                  // Identifies the parent query this event belongs to.
-	Locals        *ast.ValueMap           // Contains local variable bindings from the query context. Nil if variables were not included in the trace event.
-	LocalMetadata map[ast.Var]VarMetadata // Contains metadata for the local variable bindings. Nil if variables were not included in the trace event.
-	Message       string                  // Contains message for Note events.
-	Ref           *ast.Ref                // Identifies the subject ref for the event. Only applies to Index and Wasm operations.
+	Op                        Op                      // Identifies type of event.
+	Node                      ast.Node                // Contains AST node relevant to the event.
+	Location                  *ast.Location           // The location of the Node this event relates to.
+	QueryID                   uint64                  // Identifies the query this event belongs to.
+	ParentID                  uint64                  // Identifies the parent query this event belongs to.
+	Locals                    *ast.ValueMap           // Contains local variable bindings from the query context. Nil if variables were not included in the trace event.
+	LocalMetadata             map[ast.Var]VarMetadata // Contains metadata for the local variable bindings. Nil if variables were not included in the trace event.
+	Message                   string                  // Contains message for Note events.
+	Ref                       *ast.Ref                // Identifies the subject ref for the event. Only applies to Index and Wasm operations.
+	LocalVirtualCacheSnapshot *ast.ValueMap
 
 	input    *ast.Term
 	bindings *bindings
@@ -366,7 +367,6 @@ func exprLocalVars(e *Event) *ast.ValueMap {
 					vars.Put(meta.Name, val)
 				}
 			}
-
 		}
 		return false
 	}
@@ -376,6 +376,13 @@ func exprLocalVars(e *Event) *ast.ValueMap {
 		ast.WalkTerms(r.Head, findVars)
 		return vars
 	}
+
+	// The local cache snapshot only contains a snapshot for those refs present in the event node,
+	// so they can all be added to the vars map.
+	e.LocalVirtualCacheSnapshot.Iter(func(k, v ast.Value) bool {
+		vars.Put(k, v)
+		return false
+	})
 
 	ast.WalkTerms(e.Node, findVars)
 
@@ -584,6 +591,13 @@ func (v varInfo) Value() string {
 	return "undefined"
 }
 
+func (v varInfo) Title() string {
+	if v.exprLoc != nil && v.exprLoc.Text != nil {
+		return string(v.exprLoc.Text)
+	}
+	return string(v.Name)
+}
+
 func trimLocationText(loc *ast.Location) string {
 	if loc == nil {
 		return ""
@@ -610,47 +624,119 @@ func trimLocationText(loc *ast.Location) string {
 	return buf.String()
 }
 
+func padLocationText(loc *ast.Location) string {
+	if loc == nil {
+		return ""
+	}
+
+	text := string(loc.Text)
+
+	if loc.Col == 0 {
+		return text
+	}
+
+	buf := new(bytes.Buffer)
+	j := 0
+	for i := 1; i < loc.Col; i++ {
+		if len(loc.Tabs) > 0 && j < len(loc.Tabs) && loc.Tabs[j] == i {
+			buf.WriteString("\t")
+			j++
+		} else {
+			buf.WriteString(" ")
+		}
+	}
+
+	buf.WriteString(text)
+	return buf.String()
+}
+
 type PrettyEventOpts struct {
 	PrettyVars bool
 }
 
 func PrettyEvent(w io.Writer, e *Event, opts PrettyEventOpts) error {
-	trimmedExpr := trimLocationText(e.Location)
+	exprText := padLocationText(e.Location) //trimLocationText(e.Location) // string(e.Location.Text)
 
 	buf := new(bytes.Buffer)
-	buf.WriteString(trimmedExpr)
+	buf.WriteString(exprText)
+
+	exprVars := map[string]varInfo{}
+	findVars := func(term *ast.Term) bool {
+		if term.Location == nil {
+			return false
+		}
+
+		switch v := term.Value.(type) {
+		case *ast.ArrayComprehension, *ast.SetComprehension, *ast.ObjectComprehension:
+			// we don't report on the internals of a comprehension, as it's already evaluated, and we won't have the local vars.
+			return true
+		case ast.Var:
+			//val := e.Locals.Get(v)
+			//if val == nil {
+			//	return false
+			//}
+			if meta, ok := e.LocalMetadata[v]; ok {
+				info := varInfo{
+					VarMetadata: meta,
+					val:         e.Locals.Get(v),
+					exprLoc:     term.Location,
+				}
+				if term.Location != nil {
+					info.col = term.Location.Col // - exprCol
+				}
+				exprVars[string(meta.Name)] = info
+			}
+		}
+		return false
+	}
+
+	// FIXME: Do we need to walk back in the trace to find local vars for each co-expr?
+	if expr, ok := e.Node.(*ast.Expr); ok && expr != nil {
+		fmt.Println("expr: ", expr)
+		ast.WalkTerms(expr, findVars)
+		coExprs := expr.CogeneratedExprs()
+		for _, coExpr := range coExprs {
+			fmt.Println("coExpr: ", coExpr)
+			ast.WalkTerms(coExpr, findVars)
+		}
+	}
 
 	if e.Location == nil || !opts.PrettyVars {
 		_, _ = fmt.Fprintln(w, buf.String())
 	}
 
-	expr, err := ast.ParseBody(trimmedExpr)
-	if err != nil {
-		return err
-	}
-
-	exprVars := map[string]varInfo{}
-	exprCol := expr.Loc().Col
-
-	ast.WalkTerms(expr, func(term *ast.Term) bool {
-		if term.Location == nil {
-			return false
+	e.LocalVirtualCacheSnapshot.Iter(func(k, v ast.Value) bool {
+		switch k := k.(type) {
+		case ast.Ref:
+			exprVars[k.String()] = varInfo{
+				VarMetadata: VarMetadata{Name: ast.Var(k.String())},
+				val:         v,
+				exprLoc:     k[0].Location,
+				col:         k[0].Location.Col,
+			}
+		case *ast.ArrayComprehension:
+			exprVars[k.String()] = varInfo{
+				VarMetadata: VarMetadata{Name: ast.Var(k.String())},
+				val:         v,
+				exprLoc:     k.Term.Location,
+				col:         k.Term.Location.Col,
+			}
+		case *ast.SetComprehension:
+			exprVars[k.String()] = varInfo{
+				VarMetadata: VarMetadata{Name: ast.Var(k.String())},
+				val:         v,
+				exprLoc:     k.Term.Location,
+				col:         k.Term.Location.Col,
+			}
+		case *ast.ObjectComprehension:
+			exprVars[k.String()] = varInfo{
+				VarMetadata: VarMetadata{Name: ast.Var(k.String())},
+				val:         v,
+				exprLoc:     k.Key.Location,
+				col:         k.Key.Location.Col,
+			}
 		}
-		if v, ok := term.Value.(ast.Var); ok {
-			localName, meta, ok := reverseLookupInMeta(e.LocalMetadata, v)
-			if !ok {
-				return false
-			}
-			info := varInfo{
-				VarMetadata: meta,
-				val:         e.Locals.Get(localName),
-				exprLoc:     term.Location,
-			}
-			if term.Location != nil {
-				info.col = term.Location.Col - exprCol
-			}
-			exprVars[string(v)] = info
-		}
+
 		return false
 	})
 
@@ -687,13 +773,13 @@ func printPrettyVars(w *bytes.Buffer, exprVars map[string]varInfo) {
 		for _, info := range exprVars {
 			byName = append(byName, info)
 		}
-		slices.SortFunc(byName, func(a, b varInfo) int {
-			return strings.Compare(a.Name.String(), b.Name.String())
+		slices.SortStableFunc(byName, func(a, b varInfo) int {
+			return strings.Compare(a.Title(), b.Title())
 		})
 
 		w.WriteString("\nWhere:\n")
 		for _, info := range byName {
-			w.WriteString(fmt.Sprintf("\n%s: %s", info.Name, iStrs.Truncate(info.Value(), maxPrettyExprVarWidth)))
+			w.WriteString(fmt.Sprintf("\n%s: %s", info.Title(), iStrs.Truncate(info.Value(), maxPrettyExprVarWidth)))
 		}
 
 		return
@@ -706,6 +792,9 @@ func printPrettyVars(w *bytes.Buffer, exprVars map[string]varInfo) {
 	slices.SortFunc(byCol, func(a, b varInfo) int {
 		// sort first by column, then by reverse row (to present vars in the same order they appear in the expr)
 		if a.col == b.col {
+			if a.exprLoc.Row == b.exprLoc.Row {
+				return strings.Compare(a.Title(), b.Title())
+			}
 			return b.exprLoc.Row - a.exprLoc.Row
 		}
 		return a.col - b.col
@@ -741,7 +830,7 @@ func printArrows(w *bytes.Buffer, l []varInfo, printValueAt int) {
 			continue
 		}
 
-		spaces := col
+		spaces := col - 1
 		if i > 0 && !isFirst {
 			spaces = (col - prevCol) - 1
 		}
@@ -766,7 +855,7 @@ func printArrows(w *bytes.Buffer, l []varInfo, printValueAt int) {
 		if isLast && printValueAt >= 0 {
 			valueStr := iStrs.Truncate(info.Value(), maxPrettyExprVarWidth)
 			if (i > 0 && col == l[i-1].col) || (i < len(l)-1 && col == l[i+1].col) {
-				w.WriteString(fmt.Sprintf("%s: %s", info.Name, valueStr))
+				w.WriteString(fmt.Sprintf("%s: %s", info.Title(), valueStr))
 			} else {
 				w.WriteString(valueStr)
 			}

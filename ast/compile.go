@@ -4606,6 +4606,7 @@ func rewriteDynamicsOne(original *Expr, f *equalityFactory, term *Term, result B
 		generated := f.Generate(term)
 		generated.With = original.With
 		result.Append(generated)
+		connectGeneratedExprs(original, generated)
 		return result, result[len(result)-1].Operand(0)
 	case *Array:
 		for i := 0; i < v.Len(); i++ {
@@ -4634,16 +4635,19 @@ func rewriteDynamicsOne(original *Expr, f *equalityFactory, term *Term, result B
 		var extra *Expr
 		v.Body, extra = rewriteDynamicsComprehensionBody(original, f, v.Body, term)
 		result.Append(extra)
+		connectGeneratedExprs(original, extra)
 		return result, result[len(result)-1].Operand(0)
 	case *SetComprehension:
 		var extra *Expr
 		v.Body, extra = rewriteDynamicsComprehensionBody(original, f, v.Body, term)
 		result.Append(extra)
+		connectGeneratedExprs(original, extra)
 		return result, result[len(result)-1].Operand(0)
 	case *ObjectComprehension:
 		var extra *Expr
 		v.Body, extra = rewriteDynamicsComprehensionBody(original, f, v.Body, term)
 		result.Append(extra)
+		connectGeneratedExprs(original, extra)
 		return result, result[len(result)-1].Operand(0)
 	}
 	return result, term
@@ -4711,6 +4715,7 @@ func expandExpr(gen *localVarGenerator, expr *Expr) (result []*Expr) {
 		for i := 1; i < len(terms); i++ {
 			var extras []*Expr
 			extras, terms[i] = expandExprTerm(gen, terms[i])
+			connectGeneratedExprs(expr, extras...)
 			if len(expr.With) > 0 {
 				for i := range extras {
 					extras[i].With = expr.With
@@ -4736,6 +4741,13 @@ func expandExpr(gen *localVarGenerator, expr *Expr) (result []*Expr) {
 		result = append(result, expr)
 	}
 	return
+}
+
+func connectGeneratedExprs(parent *Expr, children ...*Expr) {
+	for _, child := range children {
+		child.generatedFrom = parent
+		parent.generates = append(parent.generates, child)
+	}
 }
 
 func expandExprTerm(gen *localVarGenerator, term *Term) (support []*Expr, output *Term) {
