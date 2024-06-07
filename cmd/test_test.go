@@ -911,6 +911,56 @@ data.test.test_foo: FAIL (%TIME%)
 FAIL: 1/1
 `,
 		},
+		{
+			note: "nested every",
+			files: map[string]string{
+				"/test.rego": `package test
+import rego.v1
+
+test_foo if {
+	l := [[1, 2], [3, 4], [5, 6]]
+	every x in l {
+		every y in x {
+			y < 4
+		}
+	}
+}`,
+			},
+			expected: `%ROOT%/test.rego:
+data.test.test_foo: FAIL (%TIME%)
+  On row 8:
+    			y < 4
+    			|
+    			4
+--------------------------------------------------------------------------------
+FAIL: 1/1
+`,
+		},
+		{
+			note: "nested every with comprehension",
+			files: map[string]string{
+				"/test.rego": `package test
+import rego.v1
+
+test_foo if {
+	l := [[1, 2], [3, 4], [5, 6]]
+	every x in l {
+		every y in x {
+			[v | v := y] == [42]
+		}
+	}
+}`,
+			},
+			expected: `%ROOT%/test.rego:
+data.test.test_foo: FAIL (%TIME%)
+  On row 8:
+    			[v | v := y] == [42]
+    			|
+    			[1]
+--------------------------------------------------------------------------------
+FAIL: 1/1
+`,
+		},
 	}
 
 	r := regexp.MustCompile(`FAIL \(.*s\)`)
