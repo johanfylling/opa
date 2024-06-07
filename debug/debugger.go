@@ -5,13 +5,19 @@
 package debug
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
 	"io"
+	"os"
+	"slices"
 
 	"github.com/google/go-dap"
+	fileurl "github.com/open-policy-agent/opa/internal/file/url"
 	"github.com/open-policy-agent/opa/logging"
+	"github.com/open-policy-agent/opa/rego"
+	"github.com/open-policy-agent/opa/topdown"
 )
 
 type Debugger struct {
@@ -71,6 +77,8 @@ func (d *Debugger) handleMessage(message dap.Message) (bool, dap.ResponseMessage
 		resp, err = d.launch(request)
 	case *dap.NextRequest:
 		resp, err = d.session.next(request)
+	case *dap.StackTraceRequest:
+		resp, err = d.session.stackTrace(request)
 	case *dap.ThreadsRequest:
 		resp, err = d.session.getThreads(request)
 	default:
@@ -139,11 +147,84 @@ func (d *Debugger) launchRunSession(props launchProperties) error {
 		return fmt.Errorf("debug session already active")
 	}
 
+	regoArgs := []func(*rego.Rego){
+		rego.Query(props.Query),
+	}
+
+	if len(props.DataPaths) > 0 {
+		regoArgs = append(regoArgs, rego.Load(props.DataPaths, nil))
+	}
+
+	for _, bundlePath := range props.BundlePaths {
+		regoArgs = append(regoArgs, rego.LoadBundle(bundlePath))
+	}
+
+	if props.InputPath != "" {
+		input, err := readInput(props.InputPath)
+		if err != nil {
+			return fmt.Errorf("failed to read input: %v", err)
+		}
+		regoArgs = append(regoArgs, rego.Input(input))
+	}
+
+	r := rego.New(regoArgs...)
+
+	pq, err := r.PrepareForEval(d.ctx)
+	if err != nil {
+		return fmt.Errorf("failed to prepare query for evaluation: %v", err)
+	}
+
+	tracer := newDebugTracer()
+
+	evalArgs := []rego.EvalOption{
+		rego.EvalRuleIndexing(true),
+		rego.EvalEarlyExit(true),
+		rego.EvalQueryTracer(tracer),
+	}
+
+	go func() {
+		rs, err := pq.Eval(d.ctx, evalArgs...)
+		if err != nil {
+			d.logger.Error("Evaluation failed: %v", err)
+			return
+		}
+
+		if rsJson, err := json.MarshalIndent(rs, "", "  "); err == nil {
+			d.logger.Info("Result: %s\n", rsJson)
+			d.protocolManager.sendEvent(newOutputEvent("stdout", string(rsJson)))
+		} else {
+			d.logger.Info("Result: %v\n", rs)
+		}
+
+		tracer.resultSet = rs
+		_ = tracer.Close()
+	}()
+
 	// Threads are 1-indexed.
-	t := newThread(1, "main")
-	d.session = newSession(d, []*thread{t})
+	t := newThread(1, "main", tracer, d.logger)
+	d.session = newSession(d, props, []*thread{t})
+	t.eventHandler = d.session.handleEvent
 	d.session.start(d.ctx)
 	return nil
+}
+
+func readInput(path string) (interface{}, error) {
+	path, err := fileurl.Clean(path)
+	if err != nil {
+		return nil, err
+	}
+
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+
+	var input interface{}
+	if err := json.Unmarshal(data, &input); err != nil {
+		return nil, err
+	}
+
+	return input, nil
 }
 
 func (d *Debugger) launchTestSession(props launchProperties) error {
@@ -154,15 +235,27 @@ func (d *Debugger) launchTestSession(props launchProperties) error {
 	return fmt.Errorf("test launch not supported")
 }
 
-type session struct {
-	d       *Debugger
-	threads []*thread
+type frameInfo struct {
+	frame      *dap.StackFrame
+	threadId   int
+	stackIndex int
 }
 
-func newSession(debugger *Debugger, threads []*thread) *session {
+type session struct {
+	d              *Debugger
+	properties     launchProperties
+	threads        []*thread
+	frames         []*frameInfo
+	framesByThread map[int][]*frameInfo
+}
+
+func newSession(debugger *Debugger, props launchProperties, threads []*thread) *session {
 	return &session{
-		d:       debugger,
-		threads: threads,
+		d:              debugger,
+		properties:     props,
+		threads:        threads,
+		frames:         []*frameInfo{},
+		framesByThread: map[int][]*frameInfo{},
 	}
 }
 
@@ -177,7 +270,7 @@ func (s *session) start(ctx context.Context) {
 			}
 
 			for _, t := range s.threads {
-				if !t.stopped {
+				if !t.done() {
 					return
 				}
 			}
@@ -196,7 +289,24 @@ func (s *session) next(r *dap.NextRequest) (*dap.NextResponse, error) {
 		return nil, fmt.Errorf("invalid thread id: %d", r.Arguments.ThreadId)
 	}
 
-	err := s.threads[threadIndex].stepIn()
+	t := s.threads[threadIndex]
+	err := t.stepIn()
+	if err == nil {
+		s.d.protocolManager.sendEvent(newStoppedEntryEvent(t.id))
+	}
+	if t.done() {
+		s.d.protocolManager.sendEvent(newThreadEvent(t.id, "exited"))
+		allStopped := true
+		for _, t := range s.threads {
+			if !t.done() {
+				allStopped = false
+				break
+			}
+		}
+		if allStopped {
+			s.d.protocolManager.sendEvent(newTerminatedEvent())
+		}
+	}
 
 	return &dap.NextResponse{}, err
 }
@@ -215,4 +325,105 @@ func (s *session) getThreads(_ *dap.ThreadsRequest) (*dap.ThreadsResponse, error
 	}
 
 	return newThreadsResponse(threads), nil
+}
+
+type sessionThreadState struct {
+	threadState
+	entered bool
+}
+
+func (s *session) handleEvent(t *thread, e *topdown.Event, ts threadState) (bool, threadState, error) {
+	state, ok := ts.(*sessionThreadState)
+	if state != nil && !ok {
+		s.d.logger.Warn("invalid thread state: %v", s)
+	}
+	if state == nil {
+		state = &sessionThreadState{}
+	}
+
+	if s.properties.StopOnEntry && !state.entered && e.Location.File != "" {
+		state.entered = true
+		s.d.logger.Info("Thread %d stopped at entry", t.id)
+		s.d.protocolManager.sendEvent(newStoppedEntryEvent(t.id))
+		return true, state, nil
+	}
+
+	return false, state, nil
+}
+
+func (s *session) stackTrace(request *dap.StackTraceRequest) (*dap.StackTraceResponse, error) {
+	if s == nil {
+		return nil, fmt.Errorf("no active debug session")
+	}
+
+	threadIndex := request.Arguments.ThreadId - 1
+	if threadIndex < 0 || threadIndex >= len(s.threads) {
+		return nil, fmt.Errorf("invalid thread id: %d", request.Arguments.ThreadId)
+	}
+
+	t := s.threads[threadIndex]
+
+	threadFrames := s.framesByThread[t.id]
+	if threadFrames == nil {
+		threadFrames = []*frameInfo{}
+	}
+
+	stackIndex := 0
+	if len(threadFrames) > 0 {
+		stackIndex = threadFrames[len(threadFrames)-1].stackIndex
+	}
+	newEvents := t.stackEvents(stackIndex + 1)
+	for _, e := range newEvents {
+		stackIndex++
+		info := s.newStackFrame(e, t, stackIndex)
+		threadFrames = append(threadFrames, info)
+	}
+	s.framesByThread[t.id] = threadFrames
+
+	frames := make([]dap.StackFrame, 0, len(threadFrames))
+	for _, info := range threadFrames {
+		frames = append(frames, *info.frame)
+	}
+	slices.Reverse(frames)
+
+	return newStackTraceResponse(frames), nil
+}
+
+func (s *session) newStackFrame(e *topdown.Event, t *thread, stackIndex int) *frameInfo {
+	id := len(s.frames) + 1 // frames are 1-indexed
+
+	var expl string
+	if e.Node != nil {
+		pretty := new(bytes.Buffer)
+		topdown.PrettyTrace(pretty, []*topdown.Event{e})
+		expl = pretty.String()
+	} else {
+		expl = fmt.Sprintf("%s, %s", e.Op, e.Location)
+	}
+
+	var source *dap.Source
+	line := 1
+	if e.Location != nil {
+		line = e.Location.Row
+		if e.Location.File != "" {
+			source = &dap.Source{
+				Path: e.Location.File,
+			}
+		}
+	}
+
+	frame := &dap.StackFrame{
+		Id:     id,
+		Name:   fmt.Sprintf("#%d: %d %s", id, e.QueryID, expl),
+		Line:   line,
+		Source: source,
+	}
+
+	info := &frameInfo{
+		stackIndex: stackIndex,
+		threadId:   t.id,
+		frame:      frame,
+	}
+	s.frames = append(s.frames, info)
+	return info
 }

@@ -73,6 +73,9 @@ func (pm *protocolManager) Start(ctx context.Context, conn io.ReadWriteCloser, h
 			}
 
 			stop, resp, err := handle(req)
+			if err != nil {
+				pm.logger.Warn("Error handling request: %v", err)
+			}
 			pm.sendResponse(resp, req, err)
 			if stop {
 				done <- err
@@ -168,6 +171,22 @@ func newLaunchResponse() *dap.LaunchResponse {
 	}
 }
 
+func newStackTraceResponse(stack []dap.StackFrame) *dap.StackTraceResponse {
+	return &dap.StackTraceResponse{
+		Response: dap.Response{
+			ProtocolMessage: dap.ProtocolMessage{
+				Type: "response",
+			},
+			Command: "stackTrace",
+			Success: true,
+		},
+		Body: dap.StackTraceResponseBody{
+			StackFrames: stack,
+			TotalFrames: len(stack),
+		},
+	}
+}
+
 func newThreadsResponse(threads []dap.Thread) *dap.ThreadsResponse {
 	return &dap.ThreadsResponse{
 		Response: dap.Response{
@@ -222,6 +241,29 @@ func newTerminatedEvent() *dap.TerminatedEvent {
 				Type: "event",
 			},
 			Event: "terminated",
+		},
+	}
+}
+
+func newStoppedEntryEvent(threadId int) *dap.StoppedEvent {
+	return newStoppedEvent("entry", threadId, nil, "", "")
+}
+
+func newStoppedEvent(reason string, threadId int, bps []int, description string, text string) *dap.StoppedEvent {
+	return &dap.StoppedEvent{
+		Event: dap.Event{
+			ProtocolMessage: dap.ProtocolMessage{
+				Type: "event",
+			},
+			Event: "stopped",
+		},
+		Body: dap.StoppedEventBody{
+			Reason:            reason,
+			ThreadId:          threadId,
+			Text:              text,
+			AllThreadsStopped: true,
+			HitBreakpointIds:  bps,
+			PreserveFocusHint: false,
 		},
 	}
 }
