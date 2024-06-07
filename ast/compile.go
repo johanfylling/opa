@@ -2169,11 +2169,25 @@ func (c *Compiler) rewriteDynamicTerms() {
 }
 
 // rewriteDynamics rewrites equality expressions in test rule bodies to create local vars for statements that would otherwise
-// not have their values captured through tracing.
-// For example, the rule:
+// not have their values captured through tracing, such as refs and comprehensions not unified/assigned to a local var.
+// For example, given the following module:
+//
+//	package test
+//
+//	p.q contains v if {
+//		some v in numbers.range(1, 3)
+//	}
+//
+//	p.r := "foo"
 //
 //	test_rule {
-//	  data.
+//		p == {
+//			"q": {4, 5, 6}
+//		}
+//	}
+//
+// `p` in `test_rule` resolves to `data.test.p`, which won't be an entry in the virtual-cache and must therefore be calculated after-the-fact.
+// If `p` isn't captured in a local var, there is no trivial way to retrieve its value for test reporting.
 func (c *Compiler) rewriteTestRuleEqualities() {
 	f := newEqualityFactory(c.localvargen)
 	for _, name := range c.sorted {
@@ -4545,6 +4559,8 @@ func rewriteTestEqualities(f *equalityFactory, body Body) Body {
 				result, terms[1] = rewriteDynamicsShallow(expr, f, terms[1], result)
 				result, terms[2] = rewriteDynamicsShallow(expr, f, terms[2], result)
 			case expr.IsEvery():
+				// We rewrite equalities inside of every-bodies as a fail here will be the cause of the test-rule fail.
+				// Failures inside other expressions with closures, such as comprehensions, won't cause the test-rule to fail, so we skip those.
 				every := expr.Terms.(*Every)
 				every.Body = rewriteTestEqualities(f, every.Body)
 			}

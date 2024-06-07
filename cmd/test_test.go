@@ -671,6 +671,38 @@ FAIL: 1/1
 `,
 		},
 		{
+			note: "composite rules with ref-head, composite value",
+			files: map[string]string{
+				"/test.rego": `package test
+import rego.v1
+
+p.q contains v if {
+	some v in numbers.range(1, 3)
+}
+
+p.r := "foo"
+
+test_p if {
+	p == {
+		"q": {4, 5, 6},
+		"r": "bar"
+	}
+}`,
+			},
+			expected: `%ROOT%/test.rego:
+data.test.test_p: FAIL (%TIME%)
+  On row 11:
+    	p == {
+    		"q": {4, 5, 6},
+    		"r": "bar"
+    	}
+    	|
+    	{"q": {1, 2, 3}, "r": "foo"}
+--------------------------------------------------------------------------------
+FAIL: 1/1
+`,
+		},
+		{
 			note: "refs in different compiled sub-expressions",
 			files: map[string]string{
 				"/test.rego": `package test
@@ -957,6 +989,52 @@ data.test.test_foo: FAIL (%TIME%)
     			[v | v := y] == [42]
     			|
     			[1]
+--------------------------------------------------------------------------------
+FAIL: 1/1
+`,
+		},
+		{
+			note: "ref equality",
+			files: map[string]string{
+				"/test.rego": `package test
+import rego.v1
+
+a := 1
+b := 2
+
+test_foo if {
+	a == b
+}`,
+			},
+			expected: `%ROOT%/test.rego:
+data.test.test_foo: FAIL (%TIME%)
+  On row 8:
+    	a == b
+    	|    |
+    	|    2
+    	1
+--------------------------------------------------------------------------------
+FAIL: 1/1
+`,
+		},
+		{
+			note: "ref equality (data)",
+			files: map[string]string{
+				"/test.rego": `package test
+import rego.v1
+
+test_foo if {
+	data.a == data.b
+}`,
+				"data.json": `{"a": 1, "b": 2}`,
+			},
+			expected: `%ROOT%/test.rego:
+data.test.test_foo: FAIL (%TIME%)
+  On row 5:
+    	data.a == data.b
+    	|         |
+    	|         2
+    	1
 --------------------------------------------------------------------------------
 FAIL: 1/1
 `,
