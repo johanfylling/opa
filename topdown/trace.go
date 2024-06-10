@@ -79,19 +79,19 @@ type VarMetadata struct {
 
 // Event contains state associated with a tracing event.
 type Event struct {
-	Op                        Op                      // Identifies type of event.
-	Node                      ast.Node                // Contains AST node relevant to the event.
-	Location                  *ast.Location           // The location of the Node this event relates to.
-	QueryID                   uint64                  // Identifies the query this event belongs to.
-	ParentID                  uint64                  // Identifies the parent query this event belongs to.
-	Locals                    *ast.ValueMap           // Contains local variable bindings from the query context. Nil if variables were not included in the trace event.
-	LocalMetadata             map[ast.Var]VarMetadata // Contains metadata for the local variable bindings. Nil if variables were not included in the trace event.
-	Message                   string                  // Contains message for Note events.
-	Ref                       *ast.Ref                // Identifies the subject ref for the event. Only applies to Index and Wasm operations.
-	LocalVirtualCacheSnapshot *ast.ValueMap
+	Op            Op                      // Identifies type of event.
+	Node          ast.Node                // Contains AST node relevant to the event.
+	Location      *ast.Location           // The location of the Node this event relates to.
+	QueryID       uint64                  // Identifies the query this event belongs to.
+	ParentID      uint64                  // Identifies the parent query this event belongs to.
+	Locals        *ast.ValueMap           // Contains local variable bindings from the query context. Nil if variables were not included in the trace event.
+	LocalMetadata map[ast.Var]VarMetadata // Contains metadata for the local variable bindings. Nil if variables were not included in the trace event.
+	Message       string                  // Contains message for Note events.
+	Ref           *ast.Ref                // Identifies the subject ref for the event. Only applies to Index and Wasm operations.
 
-	input    *ast.Term
-	bindings *bindings
+	input                     *ast.Term
+	bindings                  *bindings
+	localVirtualCacheSnapshot *ast.ValueMap
 }
 
 // HasRule returns true if the Event contains an ast.Rule.
@@ -379,7 +379,7 @@ func exprLocalVars(e *Event) *ast.ValueMap {
 
 	// The local cache snapshot only contains a snapshot for those refs present in the event node,
 	// so they can all be added to the vars map.
-	e.LocalVirtualCacheSnapshot.Iter(func(k, v ast.Value) bool {
+	e.localVirtualCacheSnapshot.Iter(func(k, v ast.Value) bool {
 		vars.Put(k, v)
 		return false
 	})
@@ -654,82 +654,120 @@ type PrettyEventOpts struct {
 	PrettyVars bool
 }
 
-func PrettyEvent(w io.Writer, e *Event, opts PrettyEventOpts) error {
-	exprText := padLocationText(e.Location) //trimLocationText(e.Location) // string(e.Location.Text)
-
-	buf := new(bytes.Buffer)
-	buf.WriteString(exprText)
-
-	exprVars := map[string]varInfo{}
-	findVars := func(term *ast.Term) bool {
-		if term.Location == nil {
-			return false
-		}
-
-		switch v := term.Value.(type) {
-		case *ast.ArrayComprehension, *ast.SetComprehension, *ast.ObjectComprehension:
-			// we don't report on the internals of a comprehension, as it's already evaluated, and we won't have the local vars.
-			return true
-		case ast.Var:
-			//val := e.Locals.Get(v)
-			//if val == nil {
-			//	return false
-			//}
-			if meta, ok := e.LocalMetadata[v]; ok {
-				info := varInfo{
-					VarMetadata: meta,
-					val:         e.Locals.Get(v),
-					exprLoc:     term.Location,
-				}
-				if term.Location != nil {
-					info.col = term.Location.Col // - exprCol
-				}
-				exprVars[string(meta.Name)] = info
+func walkTestTerms(x interface{}, f func(*ast.Term) bool) {
+	var vis *ast.GenericVisitor
+	vis = ast.NewGenericVisitor(func(x interface{}) bool {
+		switch x := x.(type) {
+		case ast.Call:
+			for _, t := range x[1:] {
+				vis.Walk(t)
 			}
+			return true
+		case *ast.Expr:
+			if x.IsCall() {
+				for _, o := range x.Operands() {
+					vis.Walk(o)
+				}
+				for i := range x.With {
+					vis.Walk(x.With[i])
+				}
+				return true
+			}
+		case *ast.Term:
+			return f(x)
+		case *ast.With:
+			vis.Walk(x.Value)
+			return true
 		}
 		return false
+	})
+	vis.Walk(x)
+}
+
+func PrettyEvent(w io.Writer, e *Event, opts PrettyEventOpts) error {
+	if !opts.PrettyVars {
+		_, _ = fmt.Fprintln(w, padLocationText(e.Location))
+		return nil
+	}
+
+	buf := new(bytes.Buffer)
+	exprVars := map[string]varInfo{}
+
+	findVars := func(unknownAreUndefined bool) func(term *ast.Term) bool {
+		return func(term *ast.Term) bool {
+			if term.Location == nil {
+				return false
+			}
+
+			switch v := term.Value.(type) {
+			case *ast.ArrayComprehension, *ast.SetComprehension, *ast.ObjectComprehension:
+				// we don't report on the internals of a comprehension, as it's already evaluated, and we won't have the local vars.
+				return true
+			case ast.Var:
+				var info *varInfo
+				if meta, ok := e.LocalMetadata[v]; ok {
+					info = &varInfo{
+						VarMetadata: meta,
+						val:         e.Locals.Get(v),
+						exprLoc:     term.Location,
+					}
+				} else if unknownAreUndefined {
+					info = &varInfo{
+						VarMetadata: VarMetadata{Name: v},
+						exprLoc:     term.Location,
+						col:         term.Location.Col,
+					}
+				}
+
+				if info != nil {
+					if v, exists := exprVars[info.Title()]; !exists || v.val == nil {
+						if term.Location != nil {
+							info.col = term.Location.Col
+						}
+						exprVars[info.Title()] = *info
+					}
+				}
+			}
+			return false
+		}
 	}
 
 	// FIXME: Do we need to walk back in the trace to find local vars for each co-expr?
-	if expr, ok := e.Node.(*ast.Expr); ok && expr != nil {
-		fmt.Println("expr: ", expr)
-		ast.WalkTerms(expr, findVars)
-		coExprs := expr.CogeneratedExprs()
-		for _, coExpr := range coExprs {
-			fmt.Println("coExpr: ", coExpr)
-			ast.WalkTerms(coExpr, findVars)
-		}
+	expr, ok := e.Node.(*ast.Expr)
+	if !ok || expr == nil {
+		return nil
 	}
 
-	if e.Location == nil || !opts.PrettyVars {
-		_, _ = fmt.Fprintln(w, buf.String())
-	}
+	base := expr.BaseCogeneratedExpr()
+	exprText := padLocationText(base.Location)
+	buf.WriteString(exprText)
 
-	e.LocalVirtualCacheSnapshot.Iter(func(k, v ast.Value) bool {
+	e.localVirtualCacheSnapshot.Iter(func(k, v ast.Value) bool {
+		var info *varInfo
 		switch k := k.(type) {
 		case ast.Ref:
-			exprVars[k.String()] = varInfo{
+			info = &varInfo{
 				VarMetadata: VarMetadata{Name: ast.Var(k.String())},
 				val:         v,
 				exprLoc:     k[0].Location,
 				col:         k[0].Location.Col,
 			}
 		case *ast.ArrayComprehension:
-			exprVars[k.String()] = varInfo{
+			info = &varInfo{
 				VarMetadata: VarMetadata{Name: ast.Var(k.String())},
 				val:         v,
 				exprLoc:     k.Term.Location,
 				col:         k.Term.Location.Col,
 			}
 		case *ast.SetComprehension:
-			exprVars[k.String()] = varInfo{
+			info = &varInfo{
 				VarMetadata: VarMetadata{Name: ast.Var(k.String())},
 				val:         v,
 				exprLoc:     k.Term.Location,
 				col:         k.Term.Location.Col,
 			}
 		case *ast.ObjectComprehension:
-			exprVars[k.String()] = varInfo{
+			info = &varInfo{
 				VarMetadata: VarMetadata{Name: ast.Var(k.String())},
 				val:         v,
 				exprLoc:     k.Key.Location,
@@ -737,8 +775,20 @@ func PrettyEvent(w io.Writer, e *Event, opts PrettyEventOpts) error {
 			}
 		}
 
+		if info != nil {
+			exprVars[info.Title()] = *info
+		}
+
 		return false
 	})
+
+	fmt.Println("expr: ", expr) // FIXME: remove
+	walkTestTerms(expr, findVars(true))
+	coExprs := expr.CogeneratedExprs()
+	for _, coExpr := range coExprs {
+		fmt.Println("coExpr: ", coExpr) // FIXME: remove
+		walkTestTerms(coExpr, findVars(false))
+	}
 
 	printPrettyVars(buf, exprVars)
 	_, _ = fmt.Fprint(w, buf.String())
@@ -755,7 +805,6 @@ func reverseLookupInMeta(meta map[ast.Var]VarMetadata, name ast.Var) (ast.Var, V
 }
 
 func printPrettyVars(w *bytes.Buffer, exprVars map[string]varInfo) {
-	w.WriteString("\n")
 
 	containsTabs := false
 	varRows := make(map[int]interface{})
@@ -777,7 +826,7 @@ func printPrettyVars(w *bytes.Buffer, exprVars map[string]varInfo) {
 			return strings.Compare(a.Title(), b.Title())
 		})
 
-		w.WriteString("\nWhere:\n")
+		w.WriteString("\n\nWhere:\n")
 		for _, info := range byName {
 			w.WriteString(fmt.Sprintf("\n%s: %s", info.Title(), iStrs.Truncate(info.Value(), maxPrettyExprVarWidth)))
 		}
@@ -804,6 +853,7 @@ func printPrettyVars(w *bytes.Buffer, exprVars map[string]varInfo) {
 		return
 	}
 
+	w.WriteString("\n")
 	printArrows(w, byCol, -1)
 	for i := len(byCol) - 1; i >= 0; i-- {
 		w.WriteString("\n")

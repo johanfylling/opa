@@ -96,10 +96,10 @@ func (r PrettyReporter) Report(ch chan *Result) error {
 				fmt.Fprintln(newIndentingWriter(r.Output), strings.TrimSpace(string(tr.Output)))
 				fmt.Fprintln(r.Output)
 			}
-			if r.FailureLine && tr.Location != nil {
+			if r.FailureLine && tr.Error == nil {
 				for i := len(tr.Trace) - 1; i >= 0; i-- {
 					e := tr.Trace[i]
-					if e.Op == topdown.FailOp && e.Location != nil && e.Location.File != "" {
+					if e.Op == topdown.FailOp && e.Location != nil && e.QueryID != 0 {
 						if expr, isExpr := e.Node.(*ast.Expr); isExpr {
 							if _, isEvery := expr.Terms.(*ast.Every); isEvery {
 								// We're interested in the failing expression inside the every body.

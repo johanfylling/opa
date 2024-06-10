@@ -470,6 +470,63 @@ FAIL: 1/1
 `,
 		},
 		{
+			note: "array containing refs",
+			files: map[string]string{
+				"/test.rego": `package test
+import rego.v1
+
+a := 1
+
+b := 2
+
+test_foo if {
+	[a, data.test.b, data.c] == [4, 5, 6]
+}
+`,
+				"data.json": `{"c": 3}`,
+			},
+			expected: `%ROOT%/test.rego:
+data.test.test_foo: FAIL (%TIME%)
+  On row 9:
+    	[a, data.test.b, data.c] == [4, 5, 6]
+    	 |  |            |
+    	 |  |            3
+    	 |  2
+    	 1
+--------------------------------------------------------------------------------
+FAIL: 1/1
+`,
+		},
+		{
+			note: "array containing refs, undefined",
+			files: map[string]string{
+				"/test.rego": `package test
+import rego.v1
+
+a := 1
+
+b := data.b
+
+test_foo if {
+	[a, b, data.c] == [4, 5, 6]
+}
+`,
+				"data.json": `{"c": 3}`,
+			},
+			// Note: each dynamic array element is broken out into a separate "co-expression" by the compiler.
+			// Since we failed on the 2nd element (b), we don't have value for the 3rd element (data.c).
+			expected: `%ROOT%/test.rego:
+data.test.test_foo: FAIL (%TIME%)
+  On row 9:
+    	[a, b, data.c] == [4, 5, 6]
+    	 |  |
+    	 |  undefined
+    	 1
+--------------------------------------------------------------------------------
+FAIL: 1/1
+`,
+		},
+		{
 			note: "nested collections containing vars",
 			files: map[string]string{
 				"/test.rego": `package test
@@ -748,9 +805,9 @@ test_p if {
 			expected: `%ROOT%/test.rego:
 data.test.test_p: FAIL (%TIME%)
   On row 9:
-    p with input.x as 2
-    |
-    undefined
+    	p with input.x as 2
+    	|
+    	undefined
 --------------------------------------------------------------------------------
 FAIL: 1/1
 `,
@@ -1034,6 +1091,55 @@ data.test.test_foo: FAIL (%TIME%)
     	data.a == data.b
     	|         |
     	|         2
+    	1
+--------------------------------------------------------------------------------
+FAIL: 1/1
+`,
+		},
+		{
+			note: "with, containing local vars",
+			files: map[string]string{
+				"/test.rego": `package test
+import rego.v1
+
+p := input.x
+
+test_p if {
+	a := 1
+	p == 2 with input.x as a
+}`,
+			},
+			expected: `%ROOT%/test.rego:
+data.test.test_p: FAIL (%TIME%)
+  On row 8:
+    	p == 2 with input.x as a
+    	|                      |
+    	|                      1
+    	1
+--------------------------------------------------------------------------------
+FAIL: 1/1
+`,
+		},
+		{
+			note: "with, containing ref",
+			files: map[string]string{
+				"/test.rego": `package test
+import rego.v1
+
+p := input.x
+
+testInput := {"x": 1}
+
+test_p if {
+	p == 2 with input as testInput
+}`,
+			},
+			expected: `%ROOT%/test.rego:
+data.test.test_p: FAIL (%TIME%)
+  On row 9:
+    	p == 2 with input as testInput
+    	|                    |
+    	|                    {"x": 1}
     	1
 --------------------------------------------------------------------------------
 FAIL: 1/1

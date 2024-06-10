@@ -283,7 +283,7 @@ func (e *eval) traceEvent(op Op, x ast.Node, msg string, target *ast.Ref) {
 
 		evt.Locals = ast.NewValueMap()
 		evt.LocalMetadata = map[ast.Var]VarMetadata{}
-		evt.LocalVirtualCacheSnapshot = ast.NewValueMap()
+		evt.localVirtualCacheSnapshot = ast.NewValueMap()
 
 		_ = e.bindings.Iter(nil, func(k, v *ast.Term) error {
 			original := k.Value.(ast.Var)
@@ -312,7 +312,7 @@ func (e *eval) traceEvent(op Op, x ast.Node, msg string, target *ast.Ref) {
 			case ast.Ref:
 				groundRef := x.GroundPrefix()
 				if v, _ := e.virtualCache.Get(groundRef); v != nil {
-					evt.LocalVirtualCacheSnapshot.Put(groundRef, v.Value)
+					evt.localVirtualCacheSnapshot.Put(groundRef, v.Value)
 				}
 			}
 			return false

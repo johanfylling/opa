@@ -1285,9 +1285,9 @@ query:1 %.*%         | Index data.test.p (matched 1 rule, early exit)     {}
 %.*%/test.rego:8     | | Eval minus(z, y, __local3__)                     {y: 2, z: 3}
 %.*%/test.rego:8     | | Eval x = __local3__                              {__local3__: 1, x: 1}
 %.*%/test.rego:4     | | Exit data.test.p early                           {}
-query:1 %.*%         | Exit data.test.p = _                               {_: true}
-query:1 %.*%         Redo data.test.p = _                                 {_: true}
-query:1 %.*%         | Redo data.test.p = _                               {_: true}
+query:1 %.*%         | Exit data.test.p = _                               {_: true, data.test.p: true}
+query:1 %.*%         Redo data.test.p = _                                 {_: true, data.test.p: true}
+query:1 %.*%         | Redo data.test.p = _                               {_: true, data.test.p: true}
 %.*%/test.rego:4     | Redo data.test.p                                   {}
 %.*%/test.rego:8     | | Redo x = __local3__                              {__local3__: 1, x: 1}
 %.*%/test.rego:8     | | Redo minus(z, y, __local3__)                     {__local3__: 1, y: 2, z: 3}
@@ -1331,12 +1331,12 @@ query:1 %.*%          | Index data.test.p (matched 1 rule, early exit)       {}
 %.*%/test.rego:4      | | | Exit data.test.v early                           {}
 %.*%/test.rego:14     | | Eval x.foo[_] = "a"                                {x: {"bar": ["a", "b", "c", "d", ...}
 %.*%/test.rego:11     | | Exit data.test.p early                             {}
-query:1 %.*%          | Exit data.test.p = _                                 {_: true}
-query:1 %.*%          Redo data.test.p = _                                   {_: true}
-query:1 %.*%          | Redo data.test.p = _                                 {_: true}
+query:1 %.*%          | Exit data.test.p = _                                 {_: true, data.test.p: true}
+query:1 %.*%          Redo data.test.p = _                                   {_: true, data.test.p: true}
+query:1 %.*%          | Redo data.test.p = _                                 {_: true, data.test.p: true}
 %.*%/test.rego:11     | Redo data.test.p                                     {}
 %.*%/test.rego:14     | | Redo x.foo[_] = "a"                                {_: 0, x: {"bar": ["a", "b", "c", "d", ...}
-%.*%/test.rego:12     | | Redo x = data.test.v                               {x: {"bar": ["a", "b", "c", "d", ...}
+%.*%/test.rego:12     | | Redo x = data.test.v                               {data.test.v: {"bar": ["a", "b", "c", "d", ..., x: {"bar": ["a", "b", "c", "d", ...}
 %.*%/test.rego:4      | | | Redo true                                        {}
 true
 `,
@@ -1377,9 +1377,9 @@ query:1 %.*%          | Index data.test.p (matched 1 rule, early exit)     {}
 %.*%/test.rego:11     | | | Exit data.test.f                               {a: 1, b: 2, c: 3}
 %.*%/test.rego:8      | | Eval z = __local6__                              {__local6__: 3, z: 3}
 %.*%/test.rego:4      | | Exit data.test.p early                           {}
-query:1 %.*%          | Exit data.test.p = _                               {_: true}
-query:1 %.*%          Redo data.test.p = _                                 {_: true}
-query:1 %.*%          | Redo data.test.p = _                               {_: true}
+query:1 %.*%          | Exit data.test.p = _                               {_: true, data.test.p: true}
+query:1 %.*%          Redo data.test.p = _                                 {_: true, data.test.p: true}
+query:1 %.*%          | Redo data.test.p = _                               {_: true, data.test.p: true}
 %.*%/test.rego:4      | Redo data.test.p                                   {}
 %.*%/test.rego:8      | | Redo z = __local6__                              {__local6__: 3, z: 3}
 %.*%/test.rego:8      | | Redo data.test.f(x, y, __local6__)               {__local6__: 3, x: 1, y: 2}
@@ -1449,9 +1449,9 @@ query:1 %.*%         | Index data.test.p (matched 1 rule, early exit)           
 %.*%/test.rego:6     | | | Redo every x in __local6__ { count(x, __local7__); __local7__ = 1 }     {__local1__: 2, __local6__: ["a", "b", "c"], x: "c"}
 %.*%/test.rego:6     | | | Redo __local6__[__local1__] = x                                         {__local1__: 2, __local6__: ["a", "b", "c"], x: "c"}
 %.*%/test.rego:4     | | Exit data.test.p early                                                    {}
-query:1 %.*%         | Exit data.test.p = _                                                        {_: true}
-query:1 %.*%         Redo data.test.p = _                                                          {_: true}
-query:1 %.*%         | Redo data.test.p = _                                                        {_: true}
+query:1 %.*%         | Exit data.test.p = _                                                        {_: true, data.test.p: true}
+query:1 %.*%         Redo data.test.p = _                                                          {_: true, data.test.p: true}
+query:1 %.*%         | Redo data.test.p = _                                                        {_: true, data.test.p: true}
 %.*%/test.rego:4     | Redo data.test.p                                                            {}
 %.*%/test.rego:6     | | Redo every x in __local6__ { count(x, __local7__); __local7__ = 1 }       {__local6__: ["a", "b", "c"]}
 %.*%/test.rego:6     | | | Exit every x in __local6__ { count(x, __local7__); __local7__ = 1 }     {__local6__: ["a", "b", "c"]}
@@ -1489,26 +1489,25 @@ query:1 %.*%         | Index data.test.p (matched 1 rule, early exit)       {}
 %.*%/test.rego:4     | | | Exit data.test.a early                           {}
 %.*%/test.rego:7     | | Eval plus(__local2__, 1, __local0__)               {__local2__: 1}
 %.*%/test.rego:7     | | Eval __local0__ = 2                                {__local0__: 2}
-%.*%/test.rego:8     | | Eval __local3__ = data.test.a                      {}
-%.*%/test.rego:8     | | Index data.test.a (matched 1 rule, early exit)     {}
+%.*%/test.rego:8     | | Eval __local3__ = data.test.a                      {data.test.a: 1}
+%.*%/test.rego:8     | | Index data.test.a (matched 1 rule, early exit)     {data.test.a: 1}
 %.*%/test.rego:8     | | Eval plus(__local3__, 2, __local1__)               {__local3__: 1}
 %.*%/test.rego:8     | | Eval __local1__ = 3                                {__local1__: 3}
 %.*%/test.rego:6     | | Exit data.test.p early                             {}
-query:1 %.*%         | Exit data.test.p = _                                 {_: true}
-query:1 %.*%         Redo data.test.p = _                                   {_: true}
-query:1 %.*%         | Redo data.test.p = _                                 {_: true}
+query:1 %.*%         | Exit data.test.p = _                                 {_: true, data.test.p: true}
+query:1 %.*%         Redo data.test.p = _                                   {_: true, data.test.p: true}
+query:1 %.*%         | Redo data.test.p = _                                 {_: true, data.test.p: true}
 %.*%/test.rego:6     | Redo data.test.p                                     {}
 %.*%/test.rego:8     | | Redo __local1__ = 3                                {__local1__: 3}
 %.*%/test.rego:8     | | Redo plus(__local3__, 2, __local1__)               {__local1__: 3, __local3__: 1}
-%.*%/test.rego:8     | | Redo __local3__ = data.test.a                      {__local3__: 1}
+%.*%/test.rego:8     | | Redo __local3__ = data.test.a                      {__local3__: 1, data.test.a: 1}
 %.*%/test.rego:7     | | Redo __local0__ = 2                                {__local0__: 2}
 %.*%/test.rego:7     | | Redo plus(__local2__, 1, __local0__)               {__local0__: 2, __local2__: 1}
-%.*%/test.rego:7     | | Redo __local2__ = data.test.a                      {__local2__: 1}
+%.*%/test.rego:7     | | Redo __local2__ = data.test.a                      {__local2__: 1, data.test.a: 1}
 %.*%/test.rego:4     | | | Redo true                                        {}
 true
 `,
 		},
-
 		{
 			note:        "input values",
 			query:       "data.test.p",
@@ -1528,7 +1527,7 @@ p if {
 	"z": 3
 }`,
 			},
-			// FIXME: Include input values in trace
+			// FIXME: Include input values in trace?
 			expected: `%SKIP_LINE%
 query:1 %.*%         Enter data.test.p = _                                 {}
 query:1 %.*%         | Eval data.test.p = _                                {}
@@ -1540,9 +1539,9 @@ query:1 %.*%         | Index data.test.p (matched 1 rule, early exit)      {}
 %.*%/test.rego:6     | | Eval plus(__local1__, __local2__, __local0__)     {__local1__: 1, __local2__: 2}
 %.*%/test.rego:6     | | Eval __local0__ = input.z                         {__local0__: 3}
 %.*%/test.rego:4     | | Exit data.test.p early                            {}
-query:1 %.*%         | Exit data.test.p = _                                {_: true}
-query:1 %.*%         Redo data.test.p = _                                  {_: true}
-query:1 %.*%         | Redo data.test.p = _                                {_: true}
+query:1 %.*%         | Exit data.test.p = _                                {_: true, data.test.p: true}
+query:1 %.*%         Redo data.test.p = _                                  {_: true, data.test.p: true}
+query:1 %.*%         | Redo data.test.p = _                                {_: true, data.test.p: true}
 %.*%/test.rego:4     | Redo data.test.p                                    {}
 %.*%/test.rego:6     | | Redo __local0__ = input.z                         {__local0__: 3}
 %.*%/test.rego:6     | | Redo plus(__local1__, __local2__, __local0__)     {__local0__: 3, __local1__: 1, __local2__: 2}
@@ -1583,9 +1582,9 @@ query:1 %.*%         | Index data.test.p (matched 1 rule, early exit)      {}
 %.*%/test.rego:6     | | Eval plus(__local1__, __local2__, __local0__)     {__local1__: 1, __local2__: 2}
 %.*%/test.rego:6     | | Eval __local0__ = data.z                          {__local0__: 3}
 %.*%/test.rego:4     | | Exit data.test.p early                            {}
-query:1 %.*%         | Exit data.test.p = _                                {_: true}
-query:1 %.*%         Redo data.test.p = _                                  {_: true}
-query:1 %.*%         | Redo data.test.p = _                                {_: true}
+query:1 %.*%         | Exit data.test.p = _                                {_: true, data.test.p: true}
+query:1 %.*%         Redo data.test.p = _                                  {_: true, data.test.p: true}
+query:1 %.*%         | Redo data.test.p = _                                {_: true, data.test.p: true}
 %.*%/test.rego:4     | Redo data.test.p                                    {}
 %.*%/test.rego:6     | | Redo __local0__ = data.z                          {__local0__: 3}
 %.*%/test.rego:6     | | Redo plus(__local1__, __local2__, __local0__)     {__local0__: 3, __local1__: 1, __local2__: 2}

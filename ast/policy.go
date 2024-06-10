@@ -1599,6 +1599,13 @@ func (expr *Expr) CogeneratedExprs() []*Expr {
 	return result
 }
 
+func (expr *Expr) BaseCogeneratedExpr() *Expr {
+	if expr.generatedFrom == nil {
+		return expr
+	}
+	return expr.generatedFrom.BaseCogeneratedExpr()
+}
+
 func visitCogeneratedExprs(expr *Expr, f func(*Expr) bool) {
 	if parent := expr.generatedFrom; parent != nil {
 		if stop := f(parent); !stop {
