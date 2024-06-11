@@ -782,11 +782,9 @@ func PrettyEvent(w io.Writer, e *Event, opts PrettyEventOpts) error {
 		return false
 	})
 
-	fmt.Println("expr: ", expr) // FIXME: remove
 	walkTestTerms(expr, findVars(true))
 	coExprs := expr.CogeneratedExprs()
 	for _, coExpr := range coExprs {
-		fmt.Println("coExpr: ", coExpr) // FIXME: remove
 		walkTestTerms(coExpr, findVars(false))
 	}
 

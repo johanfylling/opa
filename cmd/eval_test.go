@@ -1476,7 +1476,6 @@ p if {
 }
 `,
 			},
-			// FIXME: Should we include indexed values in the trace?
 			expected: `%SKIP_LINE%
 query:1 %.*%         Enter data.test.p = _                                  {}
 query:1 %.*%         | Eval data.test.p = _                                 {}
@@ -1527,7 +1526,6 @@ p if {
 	"z": 3
 }`,
 			},
-			// FIXME: Include input values in trace?
 			expected: `%SKIP_LINE%
 query:1 %.*%         Enter data.test.p = _                                 {}
 query:1 %.*%         | Eval data.test.p = _                                {}
@@ -1570,7 +1568,6 @@ p if {
 	"z": 3
 }`,
 			},
-			// FIXME: Include data values in trace
 			expected: `%SKIP_LINE%
 query:1 %.*%         Enter data.test.p = _                                 {}
 query:1 %.*%         | Eval data.test.p = _                                {}

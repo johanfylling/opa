@@ -221,6 +221,7 @@ func failTrace(t *testing.T) []*topdown.Event {
 	return *tracer
 }
 
+// TODO: Add trace tests similar to TestEvalPrettyTrace cmd/eval_test.go:1214
 //func TestResultTraceVars(t *testing.T) {
 //	tests := []struct {
 //		note     string
@@ -345,15 +346,22 @@ test_foo if {
 }
 `,
 			},
-			expected: `%ROOT%/test.rego:
+			expected: `FAILURES
+--------------------------------------------------------------------------------
 data.test.test_foo: FAIL (%TIME%)
-  On row 8:
+
+  %ROOT%/test.rego:8:
     	x == y + z
     	|    |   |
     	|    |   3
     	|    y + z: 5
     	|    y: 2
     	1
+
+SUMMARY
+--------------------------------------------------------------------------------
+%ROOT%/test.rego:
+data.test.test_foo: FAIL (%TIME%)
 --------------------------------------------------------------------------------
 FAIL: 1/1
 `,
@@ -372,15 +380,22 @@ test_foo if {
 }
 `,
 			},
-			expected: `%ROOT%/test.rego:
+			expected: `FAILURES
+--------------------------------------------------------------------------------
 data.test.test_foo: FAIL (%TIME%)
-  On row 8:
+
+  %ROOT%/test.rego:8:
     	not x == y + z
     	    |    |   |
     	    |    |   3
     	    |    y + z: 5
     	    |    y: 2
     	    5
+
+SUMMARY
+--------------------------------------------------------------------------------
+%ROOT%/test.rego:
+data.test.test_foo: FAIL (%TIME%)
 --------------------------------------------------------------------------------
 FAIL: 1/1
 `,
@@ -399,9 +414,11 @@ test_foo if {
 }
 `,
 			},
-			expected: `%ROOT%/test.rego:
+			expected: `FAILURES
+--------------------------------------------------------------------------------
 data.test.test_foo: FAIL (%TIME%)
-  On row 8:
+
+  %ROOT%/test.rego:8:
     	x == y[2] + z
     	|    |      |
     	|    |      3
@@ -409,6 +426,11 @@ data.test.test_foo: FAIL (%TIME%)
     	|    y[2]: 3
     	|    y: [1, 2, 3]
     	1
+
+SUMMARY
+--------------------------------------------------------------------------------
+%ROOT%/test.rego:
+data.test.test_foo: FAIL (%TIME%)
 --------------------------------------------------------------------------------
 FAIL: 1/1
 `,
@@ -428,9 +450,11 @@ test_foo if {
 }
 `,
 			},
-			expected: `%ROOT%/test.rego:
+			expected: `FAILURES
+--------------------------------------------------------------------------------
 data.test.test_foo: FAIL (%TIME%)
-  On row 9:
+
+  %ROOT%/test.rego:9:
     	x == y[i] + z
     	|    | |    |
     	|    | |    3
@@ -439,6 +463,11 @@ data.test.test_foo: FAIL (%TIME%)
     	|    y[i]: 3
     	|    y: [1, 2, 3]
     	1
+
+SUMMARY
+--------------------------------------------------------------------------------
+%ROOT%/test.rego:
+data.test.test_foo: FAIL (%TIME%)
 --------------------------------------------------------------------------------
 FAIL: 1/1
 `,
@@ -457,14 +486,21 @@ test_foo if {
 }
 `,
 			},
-			expected: `%ROOT%/test.rego:
+			expected: `FAILURES
+--------------------------------------------------------------------------------
 data.test.test_foo: FAIL (%TIME%)
-  On row 8:
+
+  %ROOT%/test.rego:8:
     	[x, y, z] == [4, 5, 6]
     	 |  |  |
     	 |  |  3
     	 |  2
     	 1
+
+SUMMARY
+--------------------------------------------------------------------------------
+%ROOT%/test.rego:
+data.test.test_foo: FAIL (%TIME%)
 --------------------------------------------------------------------------------
 FAIL: 1/1
 `,
@@ -485,14 +521,21 @@ test_foo if {
 `,
 				"data.json": `{"c": 3}`,
 			},
-			expected: `%ROOT%/test.rego:
+			expected: `FAILURES
+--------------------------------------------------------------------------------
 data.test.test_foo: FAIL (%TIME%)
-  On row 9:
+
+  %ROOT%/test.rego:9:
     	[a, data.test.b, data.c] == [4, 5, 6]
     	 |  |            |
     	 |  |            3
     	 |  2
     	 1
+
+SUMMARY
+--------------------------------------------------------------------------------
+%ROOT%/test.rego:
+data.test.test_foo: FAIL (%TIME%)
 --------------------------------------------------------------------------------
 FAIL: 1/1
 `,
@@ -515,13 +558,20 @@ test_foo if {
 			},
 			// Note: each dynamic array element is broken out into a separate "co-expression" by the compiler.
 			// Since we failed on the 2nd element (b), we don't have value for the 3rd element (data.c).
-			expected: `%ROOT%/test.rego:
+			expected: `FAILURES
+--------------------------------------------------------------------------------
 data.test.test_foo: FAIL (%TIME%)
-  On row 9:
+
+  %ROOT%/test.rego:9:
     	[a, b, data.c] == [4, 5, 6]
     	 |  |
     	 |  undefined
     	 1
+
+SUMMARY
+--------------------------------------------------------------------------------
+%ROOT%/test.rego:
+data.test.test_foo: FAIL (%TIME%)
 --------------------------------------------------------------------------------
 FAIL: 1/1
 `,
@@ -540,14 +590,21 @@ test_foo if {
 }
 `,
 			},
-			expected: `%ROOT%/test.rego:
+			expected: `FAILURES
+--------------------------------------------------------------------------------
 data.test.test_foo: FAIL (%TIME%)
-  On row 8:
+
+  %ROOT%/test.rego:8:
     	[x, {y, {"a": z}}] == [4, {5, {"a": 6}}]
     	 |   |        |
     	 |   |        3
     	 |   2
     	 1
+
+SUMMARY
+--------------------------------------------------------------------------------
+%ROOT%/test.rego:
+data.test.test_foo: FAIL (%TIME%)
 --------------------------------------------------------------------------------
 FAIL: 1/1
 `,
@@ -566,15 +623,22 @@ FAIL: 1/1
 	}
 `,
 			},
-			expected: `%ROOT%/test.rego:
+			expected: `FAILURES
+--------------------------------------------------------------------------------
 data.test.test_foo: FAIL (%TIME%)
-  On row 8:
+
+  %ROOT%/test.rego:8:
     		x == y +	z
     		|    |  	|
     		|    |  	3
     		|    y +	z: 5
     		|    y: 2
     		1
+
+SUMMARY
+--------------------------------------------------------------------------------
+%ROOT%/test.rego:
+data.test.test_foo: FAIL (%TIME%)
 --------------------------------------------------------------------------------
 FAIL: 1/1
 `,
@@ -593,15 +657,22 @@ FAIL: 1/1
 	}
 `,
 			},
-			expected: `%ROOT%/test.rego:
+			expected: `FAILURES
+--------------------------------------------------------------------------------
 data.test.test_foo: FAIL (%TIME%)
-  On row 8:
+
+  %ROOT%/test.rego:8:
     		x	== y +	z
     		|	   |  	|
     		|	   |  	3
     		|	   y +	z: 5
     		|	   y: 2
     		1
+
+SUMMARY
+--------------------------------------------------------------------------------
+%ROOT%/test.rego:
+data.test.test_foo: FAIL (%TIME%)
 --------------------------------------------------------------------------------
 FAIL: 1/1
 `,
@@ -630,9 +701,11 @@ FAIL: 1/1
 `,
 			},
 			// We can't deal with tabs in a consistent manner when they occur on multiple lines
-			expected: `%ROOT%/test.rego:
+			expected: `FAILURES
+--------------------------------------------------------------------------------
 data.test.test_foo: FAIL (%TIME%)
-  On row 13:
+
+  %ROOT%/test.rego:13:
     		obj == {
     			"foo_":		x,
     			"bar__":	y,
@@ -645,12 +718,15 @@ data.test.test_foo: FAIL (%TIME%)
     x: 1
     y: 2
     z: 3
+
+SUMMARY
+--------------------------------------------------------------------------------
+%ROOT%/test.rego:
+data.test.test_foo: FAIL (%TIME%)
 --------------------------------------------------------------------------------
 FAIL: 1/1
 `,
 		},
-
-		// FIXME: Requires inspection of cache
 		{
 			note: "composite rule",
 			files: map[string]string{
@@ -665,12 +741,19 @@ test_p if {
 	p == {4, 5, 6}
 }`,
 			},
-			expected: `%ROOT%/test.rego:
+			expected: `FAILURES
+--------------------------------------------------------------------------------
 data.test.test_p: FAIL (%TIME%)
-  On row 9:
+
+  %ROOT%/test.rego:9:
     	p == {4, 5, 6}
     	|
     	{1, 2, 3}
+
+SUMMARY
+--------------------------------------------------------------------------------
+%ROOT%/test.rego:
+data.test.test_p: FAIL (%TIME%)
 --------------------------------------------------------------------------------
 FAIL: 1/1
 `,
@@ -689,12 +772,19 @@ test_p if {
 	p.q == {4, 5, 6}
 }`,
 			},
-			expected: `%ROOT%/test.rego:
+			expected: `FAILURES
+--------------------------------------------------------------------------------
 data.test.test_p: FAIL (%TIME%)
-  On row 9:
+
+  %ROOT%/test.rego:9:
     	p.q == {4, 5, 6}
     	|
     	{1, 2, 3}
+
+SUMMARY
+--------------------------------------------------------------------------------
+%ROOT%/test.rego:
+data.test.test_p: FAIL (%TIME%)
 --------------------------------------------------------------------------------
 FAIL: 1/1
 `,
@@ -715,14 +805,21 @@ test_p if {
 	}
 }`,
 			},
-			expected: `%ROOT%/test.rego:
+			expected: `FAILURES
+--------------------------------------------------------------------------------
 data.test.test_p: FAIL (%TIME%)
-  On row 9:
+
+  %ROOT%/test.rego:9:
     	p == {
     		"q": {4, 5, 6}
     	}
     	|
     	{"q": {1, 2, 3}}
+
+SUMMARY
+--------------------------------------------------------------------------------
+%ROOT%/test.rego:
+data.test.test_p: FAIL (%TIME%)
 --------------------------------------------------------------------------------
 FAIL: 1/1
 `,
@@ -746,15 +843,22 @@ test_p if {
 	}
 }`,
 			},
-			expected: `%ROOT%/test.rego:
+			expected: `FAILURES
+--------------------------------------------------------------------------------
 data.test.test_p: FAIL (%TIME%)
-  On row 11:
+
+  %ROOT%/test.rego:11:
     	p == {
     		"q": {4, 5, 6},
     		"r": "bar"
     	}
     	|
     	{"q": {1, 2, 3}, "r": "foo"}
+
+SUMMARY
+--------------------------------------------------------------------------------
+%ROOT%/test.rego:
+data.test.test_p: FAIL (%TIME%)
 --------------------------------------------------------------------------------
 FAIL: 1/1
 `,
@@ -775,15 +879,22 @@ test_p if {
 }
 `,
 			},
-			expected: `%ROOT%/test.rego:
+			expected: `FAILURES
+--------------------------------------------------------------------------------
 data.test.test_p: FAIL (%TIME%)
-  On row 10:
+
+  %ROOT%/test.rego:10:
     	a == b + c
     	|    |   |
     	|    |   3
     	|    b + c: 5
     	|    b: 2
     	1
+
+SUMMARY
+--------------------------------------------------------------------------------
+%ROOT%/test.rego:
+data.test.test_p: FAIL (%TIME%)
 --------------------------------------------------------------------------------
 FAIL: 1/1
 `,
@@ -802,12 +913,19 @@ test_p if {
 	p with input.x as 2
 }`,
 			},
-			expected: `%ROOT%/test.rego:
+			expected: `FAILURES
+--------------------------------------------------------------------------------
 data.test.test_p: FAIL (%TIME%)
-  On row 9:
+
+  %ROOT%/test.rego:9:
     	p with input.x as 2
     	|
     	undefined
+
+SUMMARY
+--------------------------------------------------------------------------------
+%ROOT%/test.rego:
+data.test.test_p: FAIL (%TIME%)
 --------------------------------------------------------------------------------
 FAIL: 1/1
 `,
@@ -826,18 +944,23 @@ test_p if {
 	not p with input.x as 1
 }`,
 			},
-			expected: `%ROOT%/test.rego:
+			expected: `FAILURES
+--------------------------------------------------------------------------------
 data.test.test_p: FAIL (%TIME%)
-  On row 9:
+
+  %ROOT%/test.rego:9:
     	not p with input.x as 1
     	    |
     	    true
+
+SUMMARY
+--------------------------------------------------------------------------------
+%ROOT%/test.rego:
+data.test.test_p: FAIL (%TIME%)
 --------------------------------------------------------------------------------
 FAIL: 1/1
 `,
 		},
-
-		// TODO
 		{
 			note: "data ref",
 			files: map[string]string{
@@ -851,13 +974,20 @@ test_foo if {
 `,
 				"data.json": `{"x": 2}`,
 			},
-			expected: `%ROOT%/test.rego:
+			expected: `FAILURES
+--------------------------------------------------------------------------------
 data.test.test_foo: FAIL (%TIME%)
-  On row 6:
+
+  %ROOT%/test.rego:6:
     	data.x == y
     	|         |
     	|         1
     	2
+
+SUMMARY
+--------------------------------------------------------------------------------
+%ROOT%/test.rego:
+data.test.test_foo: FAIL (%TIME%)
 --------------------------------------------------------------------------------
 FAIL: 1/1
 `,
@@ -877,13 +1007,82 @@ test_foo if {
 `,
 				"data.json": `{"test": {"foo": {"y": 2}}}`,
 			},
-			expected: `%ROOT%/test.rego:
+			expected: `FAILURES
+--------------------------------------------------------------------------------
 data.test.test_foo: FAIL (%TIME%)
-  On row 8:
+
+  %ROOT%/test.rego:8:
     	foo == y
     	|      |
     	|      {"x": 1, "y": 42}
     	{"x": 1, "y": 2}
+
+SUMMARY
+--------------------------------------------------------------------------------
+%ROOT%/test.rego:
+data.test.test_foo: FAIL (%TIME%)
+--------------------------------------------------------------------------------
+FAIL: 1/1
+`,
+		},
+		{
+			note: "in (array)",
+			files: map[string]string{
+				"/test.rego": `package test
+import rego.v1
+
+test_foo if {
+	l := ["a", "b", "c"]
+	x := "q"
+	x in l
+}
+`,
+			},
+			expected: `FAILURES
+--------------------------------------------------------------------------------
+data.test.test_foo: FAIL (%TIME%)
+
+  %ROOT%/test.rego:7:
+    	x in l
+    	|    |
+    	|    ["a", "b", "c"]
+    	"q"
+
+SUMMARY
+--------------------------------------------------------------------------------
+%ROOT%/test.rego:
+data.test.test_foo: FAIL (%TIME%)
+--------------------------------------------------------------------------------
+FAIL: 1/1
+`,
+		},
+		{
+			note: "in (set)",
+			files: map[string]string{
+				"/test.rego": `package test
+import rego.v1
+
+test_foo if {
+	l := {"a", "b", "c"}
+	x := "q"
+	x in l
+}
+`,
+			},
+			expected: `FAILURES
+--------------------------------------------------------------------------------
+data.test.test_foo: FAIL (%TIME%)
+
+  %ROOT%/test.rego:7:
+    	x in l
+    	|    |
+    	|    {"a", "b", "c"}
+    	"q"
+
+SUMMARY
+--------------------------------------------------------------------------------
+%ROOT%/test.rego:
+data.test.test_foo: FAIL (%TIME%)
 --------------------------------------------------------------------------------
 FAIL: 1/1
 `,
@@ -900,12 +1099,19 @@ test_foo if {
 }
 `,
 			},
-			expected: `%ROOT%/test.rego:
+			expected: `FAILURES
+--------------------------------------------------------------------------------
 data.test.test_foo: FAIL (%TIME%)
-  On row 6:
+
+  %ROOT%/test.rego:6:
     	[x | x := l[_]] == ["d", "e", "f"]
     	|
     	["a", "b", "c"]
+
+SUMMARY
+--------------------------------------------------------------------------------
+%ROOT%/test.rego:
+data.test.test_foo: FAIL (%TIME%)
 --------------------------------------------------------------------------------
 FAIL: 1/1
 `,
@@ -922,12 +1128,19 @@ test_foo if {
 }
 `,
 			},
-			expected: `%ROOT%/test.rego:
+			expected: `FAILURES
+--------------------------------------------------------------------------------
 data.test.test_foo: FAIL (%TIME%)
-  On row 6:
+
+  %ROOT%/test.rego:6:
     	{x | x := l[_]} == {"b"}
     	|
     	{"a"}
+
+SUMMARY
+--------------------------------------------------------------------------------
+%ROOT%/test.rego:
+data.test.test_foo: FAIL (%TIME%)
 --------------------------------------------------------------------------------
 FAIL: 1/1
 `,
@@ -944,12 +1157,19 @@ test_foo if {
 }
 `,
 			},
-			expected: `%ROOT%/test.rego:
+			expected: `FAILURES
+--------------------------------------------------------------------------------
 data.test.test_foo: FAIL (%TIME%)
-  On row 6:
+
+  %ROOT%/test.rego:6:
     	{k: x | x := l[k]} == {3: "d", 4: "e", 5: "f"}
     	|
     	{0: "a", 1: "b", 2: "c"}
+
+SUMMARY
+--------------------------------------------------------------------------------
+%ROOT%/test.rego:
+data.test.test_foo: FAIL (%TIME%)
 --------------------------------------------------------------------------------
 FAIL: 1/1
 `,
@@ -967,12 +1187,19 @@ test_foo if {
 	}
 }`,
 			},
-			expected: `%ROOT%/test.rego:
+			expected: `FAILURES
+--------------------------------------------------------------------------------
 data.test.test_foo: FAIL (%TIME%)
-  On row 7:
+
+  %ROOT%/test.rego:7:
     		x == 1
     		|
     		2
+
+SUMMARY
+--------------------------------------------------------------------------------
+%ROOT%/test.rego:
+data.test.test_foo: FAIL (%TIME%)
 --------------------------------------------------------------------------------
 FAIL: 1/1
 `,
@@ -990,12 +1217,19 @@ test_foo if {
 	}
 }`,
 			},
-			expected: `%ROOT%/test.rego:
+			expected: `FAILURES
+--------------------------------------------------------------------------------
 data.test.test_foo: FAIL (%TIME%)
-  On row 7:
+
+  %ROOT%/test.rego:7:
     		[v | v := x] == [42]
     		|
     		[1]
+
+SUMMARY
+--------------------------------------------------------------------------------
+%ROOT%/test.rego:
+data.test.test_foo: FAIL (%TIME%)
 --------------------------------------------------------------------------------
 FAIL: 1/1
 `,
@@ -1015,12 +1249,19 @@ test_foo if {
 	}
 }`,
 			},
-			expected: `%ROOT%/test.rego:
+			expected: `FAILURES
+--------------------------------------------------------------------------------
 data.test.test_foo: FAIL (%TIME%)
-  On row 8:
+
+  %ROOT%/test.rego:8:
     			y < 4
     			|
     			4
+
+SUMMARY
+--------------------------------------------------------------------------------
+%ROOT%/test.rego:
+data.test.test_foo: FAIL (%TIME%)
 --------------------------------------------------------------------------------
 FAIL: 1/1
 `,
@@ -1040,12 +1281,19 @@ test_foo if {
 	}
 }`,
 			},
-			expected: `%ROOT%/test.rego:
+			expected: `FAILURES
+--------------------------------------------------------------------------------
 data.test.test_foo: FAIL (%TIME%)
-  On row 8:
+
+  %ROOT%/test.rego:8:
     			[v | v := y] == [42]
     			|
     			[1]
+
+SUMMARY
+--------------------------------------------------------------------------------
+%ROOT%/test.rego:
+data.test.test_foo: FAIL (%TIME%)
 --------------------------------------------------------------------------------
 FAIL: 1/1
 `,
@@ -1063,13 +1311,20 @@ test_foo if {
 	a == b
 }`,
 			},
-			expected: `%ROOT%/test.rego:
+			expected: `FAILURES
+--------------------------------------------------------------------------------
 data.test.test_foo: FAIL (%TIME%)
-  On row 8:
+
+  %ROOT%/test.rego:8:
     	a == b
     	|    |
     	|    2
     	1
+
+SUMMARY
+--------------------------------------------------------------------------------
+%ROOT%/test.rego:
+data.test.test_foo: FAIL (%TIME%)
 --------------------------------------------------------------------------------
 FAIL: 1/1
 `,
@@ -1085,13 +1340,20 @@ test_foo if {
 }`,
 				"data.json": `{"a": 1, "b": 2}`,
 			},
-			expected: `%ROOT%/test.rego:
+			expected: `FAILURES
+--------------------------------------------------------------------------------
 data.test.test_foo: FAIL (%TIME%)
-  On row 5:
+
+  %ROOT%/test.rego:5:
     	data.a == data.b
     	|         |
     	|         2
     	1
+
+SUMMARY
+--------------------------------------------------------------------------------
+%ROOT%/test.rego:
+data.test.test_foo: FAIL (%TIME%)
 --------------------------------------------------------------------------------
 FAIL: 1/1
 `,
@@ -1109,13 +1371,20 @@ test_p if {
 	p == 2 with input.x as a
 }`,
 			},
-			expected: `%ROOT%/test.rego:
+			expected: `FAILURES
+--------------------------------------------------------------------------------
 data.test.test_p: FAIL (%TIME%)
-  On row 8:
+
+  %ROOT%/test.rego:8:
     	p == 2 with input.x as a
     	|                      |
     	|                      1
     	1
+
+SUMMARY
+--------------------------------------------------------------------------------
+%ROOT%/test.rego:
+data.test.test_p: FAIL (%TIME%)
 --------------------------------------------------------------------------------
 FAIL: 1/1
 `,
@@ -1134,13 +1403,20 @@ test_p if {
 	p == 2 with input as testInput
 }`,
 			},
-			expected: `%ROOT%/test.rego:
+			expected: `FAILURES
+--------------------------------------------------------------------------------
 data.test.test_p: FAIL (%TIME%)
-  On row 9:
+
+  %ROOT%/test.rego:9:
     	p == 2 with input as testInput
     	|                    |
     	|                    {"x": 1}
     	1
+
+SUMMARY
+--------------------------------------------------------------------------------
+%ROOT%/test.rego:
+data.test.test_p: FAIL (%TIME%)
 --------------------------------------------------------------------------------
 FAIL: 1/1
 `,

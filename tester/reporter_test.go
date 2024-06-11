@@ -177,6 +177,10 @@ func TestPrettyReporterFailureLine(t *testing.T) {
 					e.QueryID = 1
 				},
 				func(e *topdown.Event) {
+					e.Location.File = "policy1.rego"
+					e.Location.Row = 5
+				},
+				func(e *topdown.Event) {
 					e.Locals = ast.NewValueMap()
 					e.Locals.Put(ast.Var("x"), ast.Number("1"))
 					e.Locals.Put(ast.Var("y"), ast.Number("2"))
@@ -234,22 +238,36 @@ func TestPrettyReporterFailureLine(t *testing.T) {
 		Output:      &buf,
 		Verbose:     false,
 		FailureLine: true,
+		LocalVars:   true,
 	}
 	ch := resultsChan(ts)
 	if err := r.Report(ch); err != nil {
 		t.Fatal(err)
 	}
 
-	exp := `policy1.rego:
-data.foo.bar.test_qux: ERROR (0s)
-  some err
+	exp := `FAILURES
+--------------------------------------------------------------------------------
 data.foo.bar.test_corge: FAIL (0s)
-  On row 1:
+
+  policy1.rego:5:
     x == y + z
     |    |   |
     |    |   3
     |    2
     1
+
+data.foo.bar.test_contains_print_fail: FAIL (0s)
+
+
+data.foo.baz.p.q.r.test_quz: FAIL (0s)
+
+
+SUMMARY
+--------------------------------------------------------------------------------
+policy1.rego:
+data.foo.bar.test_qux: ERROR (0s)
+  some err
+data.foo.bar.test_corge: FAIL (0s)
 data.foo.bar.todo_test_qux: SKIPPED
 
 policy2.rego:

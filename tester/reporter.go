@@ -56,17 +56,41 @@ func (r PrettyReporter) Report(ch chan *Result) error {
 		results = append(results, tr)
 	}
 
-	if fail > 0 && r.Verbose {
+	if fail > 0 && (r.Verbose || r.FailureLine) {
 		fmt.Fprintln(r.Output, "FAILURES")
 		r.hl()
 
 		for _, failure := range failures {
 			fmt.Fprintln(r.Output, failure)
-			fmt.Fprintln(r.Output)
-			topdown.PrettyTraceWithOpts(newIndentingWriter(r.Output), failure.Trace, topdown.PrettyTraceOptions{
-				Locations:     true,
-				ExprVariables: r.LocalVars,
-			})
+			if r.Verbose {
+				fmt.Fprintln(r.Output)
+				topdown.PrettyTraceWithOpts(newIndentingWriter(r.Output), failure.Trace, topdown.PrettyTraceOptions{
+					Locations:     true,
+					ExprVariables: r.LocalVars,
+				})
+			}
+
+			if r.FailureLine {
+				fmt.Fprintln(r.Output)
+				for i := len(failure.Trace) - 1; i >= 0; i-- {
+					e := failure.Trace[i]
+					if e.Op == topdown.FailOp && e.Location != nil && e.QueryID != 0 {
+						if expr, isExpr := e.Node.(*ast.Expr); isExpr {
+							if _, isEvery := expr.Terms.(*ast.Every); isEvery {
+								// We're interested in the failing expression inside the every body.
+								continue
+							}
+						}
+						_, _ = fmt.Fprintf(newIndentingWriter(r.Output), "%s:%d:\n", e.Location.File, e.Location.Row)
+						if err := topdown.PrettyEvent(newIndentingWriter(r.Output, 4), e, topdown.PrettyEventOpts{PrettyVars: r.LocalVars}); err != nil {
+							return err
+						}
+						_, _ = fmt.Fprintln(r.Output)
+						break
+					}
+				}
+			}
+
 			fmt.Fprintln(r.Output)
 		}
 
@@ -95,25 +119,6 @@ func (r PrettyReporter) Report(ch chan *Result) error {
 				fmt.Fprintln(r.Output)
 				fmt.Fprintln(newIndentingWriter(r.Output), strings.TrimSpace(string(tr.Output)))
 				fmt.Fprintln(r.Output)
-			}
-			if r.FailureLine && tr.Error == nil {
-				for i := len(tr.Trace) - 1; i >= 0; i-- {
-					e := tr.Trace[i]
-					if e.Op == topdown.FailOp && e.Location != nil && e.QueryID != 0 {
-						if expr, isExpr := e.Node.(*ast.Expr); isExpr {
-							if _, isEvery := expr.Terms.(*ast.Every); isEvery {
-								// We're interested in the failing expression inside the every body.
-								continue
-							}
-						}
-						_, _ = fmt.Fprintf(newIndentingWriter(r.Output), "On row %d:\n", e.Location.Row)
-						if err := topdown.PrettyEvent(newIndentingWriter(r.Output, 4), e, topdown.PrettyEventOpts{PrettyVars: true}); err != nil {
-							return err
-						}
-						_, _ = fmt.Fprintln(r.Output)
-						break
-					}
-				}
 			}
 		}
 		if tr.Error != nil {
