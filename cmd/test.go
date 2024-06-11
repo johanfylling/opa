@@ -540,7 +540,7 @@ recommended as some updates might cause them to be dropped by OPA.
 	testCommand.Flags().BoolVar(&testParams.benchmark, "bench", false, "benchmark the unit tests")
 	testCommand.Flags().StringVarP(&testParams.runRegex, "run", "r", "", "run only test cases matching the regular expression.")
 	testCommand.Flags().BoolVarP(&testParams.watch, "watch", "w", false, "watch command line files for changes")
-	testCommand.Flags().BoolVar(&testParams.varValues, "var-values", false, "show variable values in test output")
+	testCommand.Flags().BoolVar(&testParams.varValues, "var-values", false, "show local variable values in test output")
 
 	// Shared flags
 	addBundleModeFlag(testCommand.Flags(), &testParams.bundleMode, false)
