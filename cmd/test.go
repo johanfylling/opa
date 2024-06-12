@@ -350,7 +350,8 @@ func compileAndSetupTests(ctx context.Context, testParams testCommandParams, sto
 		WithEnablePrintStatements(!testParams.benchmark).
 		WithCapabilities(capabilities).
 		WithSchemas(schemaSet).
-		WithUseTypeCheckAnnotations(true)
+		WithUseTypeCheckAnnotations(true).
+		WithRewriteTestRulesToCaptureUnboundDynamics(testParams.varValues)
 
 	info, err := runtime.Term(runtime.Params{})
 	if err != nil {
