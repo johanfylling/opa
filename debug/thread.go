@@ -60,6 +60,10 @@ func (t *thread) run(ctx context.Context) error {
 	}
 }
 
+func (t *thread) resume() {
+	t.breakpointLatch.unblock()
+}
+
 func (t *thread) current() (*topdown.Event, error) {
 	_, e := t.stack.Current()
 	return e, nil
@@ -70,10 +74,8 @@ func (t *thread) stepIn() error {
 		return fmt.Errorf("thread stopped")
 	}
 
-	_, e := t.stack.Next()
-	if e == nil {
-		return fmt.Errorf("end of stack")
-	}
+	id, e := t.stack.Next()
+	t.logger.Debug("Stepped in to event: #%d", id)
 
 	br, s, err := t.eventHandler(t, e, t.state)
 	if err != nil {
@@ -87,6 +89,10 @@ func (t *thread) stepIn() error {
 	}
 
 	return nil
+}
+
+func (t *thread) stepOver() error {
+	return t.stepIn()
 }
 
 func (t *thread) stackEvents(from int) []*topdown.Event {

@@ -69,8 +69,12 @@ func (d *Debugger) handleMessage(message dap.Message) (bool, dap.ResponseMessage
 	switch request := message.(type) {
 	case *dap.AttachRequest:
 		resp, err = d.attach(request)
+	case *dap.ContinueRequest:
+		resp, err = d.session.resume(request)
 	case *dap.DisconnectRequest:
 		return true, newDisconnectResponse(), nil
+	case *dap.EvaluateRequest:
+		resp, err = d.session.evaluate(request)
 	case *dap.InitializeRequest:
 		resp, err = d.initialize(request)
 	case *dap.LaunchRequest:
@@ -79,9 +83,12 @@ func (d *Debugger) handleMessage(message dap.Message) (bool, dap.ResponseMessage
 		resp, err = d.session.next(request)
 	case *dap.StackTraceRequest:
 		resp, err = d.session.stackTrace(request)
+	case *dap.StepInRequest:
+		resp, err = d.session.stepIn(request)
 	case *dap.ThreadsRequest:
 		resp, err = d.session.getThreads(request)
 	default:
+		d.logger.Warn("Handler not found for request: %T", message)
 		err = fmt.Errorf("handler not found for request: %T", message)
 	}
 	return false, resp, err
@@ -105,16 +112,16 @@ func (d *Debugger) attach(r *dap.AttachRequest) (*dap.AttachResponse, error) {
 
 type launchProperties struct {
 	//Args        []string `json:"args"`
-	BundlePaths []string `json:"bundles"`
-	Command     string   `json:"command"`
-	DataPaths   []string `json:"data"`
-	InputPath   string   `json:"input"`
-	LogLevel    string   `json:"log_level"`
-	Query       string   `json:"query"`
-	StopOnEnd   bool     `json:"stop_on_end"`
-	StopOnEntry bool     `json:"stop_on_entry"`
-	StopOnFail  bool     `json:"stop_on_fail"`
-	Workspace   string   `json:"workspace"`
+	BundlePaths  []string `json:"bundles"`
+	Command      string   `json:"command"`
+	DataPaths    []string `json:"data"`
+	InputPath    string   `json:"input"`
+	LogLevel     string   `json:"log_level"`
+	Query        string   `json:"query"`
+	StopOnResult bool     `json:"stop_on_result"`
+	StopOnEntry  bool     `json:"stop_on_entry"`
+	StopOnFail   bool     `json:"stop_on_fail"`
+	Workspace    string   `json:"workspace"`
 }
 
 func (d *Debugger) launch(r *dap.LaunchRequest) (*dap.LaunchResponse, error) {
@@ -182,6 +189,10 @@ func (d *Debugger) launchRunSession(props launchProperties) error {
 		rego.EvalQueryTracer(tracer),
 	}
 
+	// Threads are 1-indexed.
+	t := newThread(1, "main", tracer, d.logger)
+	d.session = newSession(d, props, []*thread{t})
+
 	go func() {
 		rs, err := pq.Eval(d.ctx, evalArgs...)
 		if err != nil {
@@ -189,20 +200,11 @@ func (d *Debugger) launchRunSession(props launchProperties) error {
 			return
 		}
 
-		if rsJson, err := json.MarshalIndent(rs, "", "  "); err == nil {
-			d.logger.Info("Result: %s\n", rsJson)
-			d.protocolManager.sendEvent(newOutputEvent("stdout", string(rsJson)))
-		} else {
-			d.logger.Info("Result: %v\n", rs)
-		}
-
 		tracer.resultSet = rs
 		_ = tracer.Close()
+		d.session.result(t, rs)
 	}()
 
-	// Threads are 1-indexed.
-	t := newThread(1, "main", tracer, d.logger)
-	d.session = newSession(d, props, []*thread{t})
 	t.eventHandler = d.session.handleEvent
 	d.session.start(d.ctx)
 	return nil
@@ -279,18 +281,38 @@ func (s *session) start(ctx context.Context) {
 	}
 }
 
+func (s *session) thread(id int) (*thread, error) {
+	index := id - 1
+	if index < 0 || index >= len(s.threads) {
+		return nil, fmt.Errorf("invalid thread id: %d", id)
+	}
+	return s.threads[index], nil
+}
+
+func (s *session) resume(r *dap.ContinueRequest) (*dap.ContinueResponse, error) {
+	if s == nil {
+		return nil, fmt.Errorf("no active debug session")
+	}
+
+	t, err := s.thread(r.Arguments.ThreadId)
+	if err != nil {
+		return nil, err
+	}
+	t.resume()
+	return &dap.ContinueResponse{}, nil
+}
+
 func (s *session) next(r *dap.NextRequest) (*dap.NextResponse, error) {
 	if s == nil {
 		return nil, fmt.Errorf("no active debug session")
 	}
 
-	threadIndex := r.Arguments.ThreadId - 1
-	if threadIndex < 0 || threadIndex >= len(s.threads) {
-		return nil, fmt.Errorf("invalid thread id: %d", r.Arguments.ThreadId)
+	t, err := s.thread(r.Arguments.ThreadId)
+	if err != nil {
+		return nil, err
 	}
 
-	t := s.threads[threadIndex]
-	err := t.stepIn()
+	err = t.stepOver()
 	if err == nil {
 		s.d.protocolManager.sendEvent(newStoppedEntryEvent(t.id))
 	}
@@ -309,6 +331,37 @@ func (s *session) next(r *dap.NextRequest) (*dap.NextResponse, error) {
 	}
 
 	return &dap.NextResponse{}, err
+}
+
+func (s *session) stepIn(r *dap.StepInRequest) (*dap.StepInResponse, error) {
+	if s == nil {
+		return nil, fmt.Errorf("no active debug session")
+	}
+
+	t, err := s.thread(r.Arguments.ThreadId)
+	if err != nil {
+		return nil, err
+	}
+
+	err = t.stepIn()
+	if err == nil {
+		s.d.protocolManager.sendEvent(newStoppedEntryEvent(t.id))
+	}
+	if t.done() {
+		s.d.protocolManager.sendEvent(newThreadEvent(t.id, "exited"))
+		allStopped := true
+		for _, t := range s.threads {
+			if !t.done() {
+				allStopped = false
+				break
+			}
+		}
+		if allStopped {
+			s.d.protocolManager.sendEvent(newTerminatedEvent())
+		}
+	}
+
+	return &dap.StepInResponse{}, err
 }
 
 func (s *session) getThreads(_ *dap.ThreadsRequest) (*dap.ThreadsResponse, error) {
@@ -330,6 +383,7 @@ func (s *session) getThreads(_ *dap.ThreadsRequest) (*dap.ThreadsResponse, error
 type sessionThreadState struct {
 	threadState
 	entered bool
+	ended   bool
 }
 
 func (s *session) handleEvent(t *thread, e *topdown.Event, ts threadState) (bool, threadState, error) {
@@ -341,6 +395,31 @@ func (s *session) handleEvent(t *thread, e *topdown.Event, ts threadState) (bool
 		state = &sessionThreadState{}
 	}
 
+	if e == nil {
+		handleEnd := func() (bool, threadState, error) {
+			t.stop()
+			return false, state, fmt.Errorf("end of trace")
+		}
+
+		if state.ended {
+			s.d.logger.Debug("End of trace already handled")
+			return handleEnd()
+		}
+
+		s.d.logger.Debug("Handling end of trace")
+
+		state.ended = true
+		if s.properties.StopOnResult {
+			s.d.logger.Info("Thread %d stopped at end of trace", t.id)
+			s.d.protocolManager.sendEvent(newStoppedResultEvent(t.id))
+			return true, state, nil
+		}
+
+		return handleEnd()
+	}
+
+	s.d.logger.Debug("Handling event: #%v", e)
+
 	if s.properties.StopOnEntry && !state.entered && e.Location.File != "" {
 		state.entered = true
 		s.d.logger.Info("Thread %d stopped at entry", t.id)
@@ -351,17 +430,24 @@ func (s *session) handleEvent(t *thread, e *topdown.Event, ts threadState) (bool
 	return false, state, nil
 }
 
-func (s *session) stackTrace(request *dap.StackTraceRequest) (*dap.StackTraceResponse, error) {
+func (s *session) result(t *thread, rs rego.ResultSet) {
+	if rsJson, err := json.MarshalIndent(rs, "", "  "); err == nil {
+		s.d.logger.Info("Result: %s\n", rsJson)
+		s.d.protocolManager.sendEvent(newOutputEvent("stdout", string(rsJson)))
+	} else {
+		s.d.logger.Info("Result: %v\n", rs)
+	}
+}
+
+func (s *session) stackTrace(r *dap.StackTraceRequest) (*dap.StackTraceResponse, error) {
 	if s == nil {
 		return nil, fmt.Errorf("no active debug session")
 	}
 
-	threadIndex := request.Arguments.ThreadId - 1
-	if threadIndex < 0 || threadIndex >= len(s.threads) {
-		return nil, fmt.Errorf("invalid thread id: %d", request.Arguments.ThreadId)
+	t, err := s.thread(r.Arguments.ThreadId)
+	if err != nil {
+		return nil, err
 	}
-
-	t := s.threads[threadIndex]
 
 	threadFrames := s.framesByThread[t.id]
 	if threadFrames == nil {
@@ -426,4 +512,8 @@ func (s *session) newStackFrame(e *topdown.Event, t *thread, stackIndex int) *fr
 	}
 	s.frames = append(s.frames, info)
 	return info
+}
+
+func (s *session) evaluate(_ *dap.EvaluateRequest) (*dap.EvaluateResponse, error) {
+	return newEvaluateResponse(""), fmt.Errorf("evaluate not supported")
 }

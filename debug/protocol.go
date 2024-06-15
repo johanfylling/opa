@@ -159,6 +159,21 @@ func newDisconnectResponse() *dap.DisconnectResponse {
 	}
 }
 
+func newEvaluateResponse(value string) *dap.EvaluateResponse {
+	return &dap.EvaluateResponse{
+		Response: dap.Response{
+			ProtocolMessage: dap.ProtocolMessage{
+				Type: "response",
+			},
+			Command: "evaluate",
+			Success: true,
+		},
+		Body: dap.EvaluateResponseBody{
+			Result: value,
+		},
+	}
+}
+
 func newLaunchResponse() *dap.LaunchResponse {
 	return &dap.LaunchResponse{
 		Response: dap.Response{
@@ -247,6 +262,10 @@ func newTerminatedEvent() *dap.TerminatedEvent {
 
 func newStoppedEntryEvent(threadId int) *dap.StoppedEvent {
 	return newStoppedEvent("entry", threadId, nil, "", "")
+}
+
+func newStoppedResultEvent(threadId int) *dap.StoppedEvent {
+	return newStoppedEvent("result", threadId, nil, "", "")
 }
 
 func newStoppedEvent(reason string, threadId int, bps []int, description string, text string) *dap.StoppedEvent {
