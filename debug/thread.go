@@ -75,7 +75,7 @@ func (t *thread) stepIn() error {
 	}
 
 	id, e := t.stack.Next()
-	t.logger.Debug("Stepped in to event: #%d", id)
+	t.logger.Debug("Stepping in to event: #%d", id)
 
 	br, s, err := t.eventHandler(t, e, t.state)
 	if err != nil {
@@ -92,7 +92,38 @@ func (t *thread) stepIn() error {
 }
 
 func (t *thread) stepOver() error {
-	return t.stepIn()
+	if t.stopped {
+		return fmt.Errorf("thread stopped")
+	}
+
+	c, err := t.current()
+	if err != nil {
+		return err
+	}
+
+	for {
+		id, e := t.stack.Next()
+		if c == nil || e != nil && e.QueryID <= c.QueryID {
+			t.logger.Debug("Stepping over to event: #%d", id)
+		} else {
+			t.logger.Debug("Stepping over event: #%d", id)
+		}
+
+		br, s, err := t.eventHandler(t, e, t.state)
+		if err != nil {
+			return err
+		}
+		t.state = s
+
+		if br || e == nil || c != nil && e.QueryID <= c.QueryID {
+			t.logger.Debug("Resuming on query: %d", e.QueryID)
+			break
+		} else {
+			t.logger.Debug("Continuing past query: %d", e.QueryID)
+		}
+	}
+
+	return nil
 }
 
 func (t *thread) stackEvents(from int) []*topdown.Event {
