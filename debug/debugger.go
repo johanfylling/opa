@@ -85,6 +85,8 @@ func (d *Debugger) handleMessage(message dap.Message) (bool, dap.ResponseMessage
 		resp, err = d.session.stackTrace(request)
 	case *dap.StepInRequest:
 		resp, err = d.session.stepIn(request)
+	case *dap.StepOutRequest:
+		resp, err = d.session.stepOut(request)
 	case *dap.ThreadsRequest:
 		resp, err = d.session.getThreads(request)
 	default:
@@ -362,6 +364,37 @@ func (s *session) stepIn(r *dap.StepInRequest) (*dap.StepInResponse, error) {
 	}
 
 	return &dap.StepInResponse{}, err
+}
+
+func (s *session) stepOut(r *dap.StepOutRequest) (*dap.StepOutResponse, error) {
+	if s == nil {
+		return nil, fmt.Errorf("no active debug session")
+	}
+
+	t, err := s.thread(r.Arguments.ThreadId)
+	if err != nil {
+		return nil, err
+	}
+
+	err = t.stepOut()
+	if err == nil {
+		s.d.protocolManager.sendEvent(newStoppedEntryEvent(t.id))
+	}
+	if t.done() {
+		s.d.protocolManager.sendEvent(newThreadEvent(t.id, "exited"))
+		allStopped := true
+		for _, t := range s.threads {
+			if !t.done() {
+				allStopped = false
+				break
+			}
+		}
+		if allStopped {
+			s.d.protocolManager.sendEvent(newTerminatedEvent())
+		}
+	}
+
+	return &dap.StepOutResponse{}, err
 }
 
 func (s *session) getThreads(_ *dap.ThreadsRequest) (*dap.ThreadsResponse, error) {

@@ -126,6 +126,41 @@ func (t *thread) stepOver() error {
 	return nil
 }
 
+func (t *thread) stepOut() error {
+	if t.stopped {
+		return fmt.Errorf("thread stopped")
+	}
+
+	c, err := t.current()
+	if err != nil {
+		return err
+	}
+
+	for {
+		id, e := t.stack.Next()
+		if c == nil || e != nil && e.QueryID < c.QueryID {
+			t.logger.Debug("Stepping out to event: #%d", id)
+		} else {
+			t.logger.Debug("Stepping out event: #%d", id)
+		}
+
+		br, s, err := t.eventHandler(t, e, t.state)
+		if err != nil {
+			return err
+		}
+		t.state = s
+
+		if br || e == nil || e.QueryID < c.QueryID {
+			t.logger.Debug("Resuming on query: %d", e.QueryID)
+			break
+		} else {
+			t.logger.Debug("Continuing past query: %d", e.QueryID)
+		}
+	}
+
+	return nil
+}
+
 func (t *thread) stackEvents(from int) []*topdown.Event {
 	var events []*topdown.Event
 	for {
