@@ -29,6 +29,7 @@ type Debugger struct {
 	clientCapabilities dap.InitializeRequestArguments
 	logger             *debugLogger
 	printHook          *printHook
+	varManager         *variableManager
 }
 
 type printHook struct {
@@ -55,7 +56,8 @@ func NewDebugger(options ...func(*Debugger)) *Debugger {
 			SupportTerminateDebuggee:              true,
 			SupportsTerminateRequest:              true,
 		},
-		logger: newDebugLogger(logging.NewNoOpLogger(), logging.Info),
+		varManager: newVariableManager(),
+		logger:     newDebugLogger(logging.NewNoOpLogger(), logging.Info),
 	}
 	d.printHook = &printHook{d: d}
 
@@ -85,6 +87,8 @@ func (d *Debugger) handleMessage(message dap.Message) (bool, dap.ResponseMessage
 	switch request := message.(type) {
 	case *dap.AttachRequest:
 		resp, err = d.attach(request)
+	//case *dap.BreakpointLocationsRequest:
+	//	resp, err = d.session.breakpointLocations(request)
 	case *dap.ContinueRequest:
 		resp, err = d.session.resume(request)
 	case *dap.DisconnectRequest:
@@ -97,6 +101,10 @@ func (d *Debugger) handleMessage(message dap.Message) (bool, dap.ResponseMessage
 		resp, err = d.launch(request)
 	case *dap.NextRequest:
 		resp, err = d.session.next(request)
+	case *dap.ScopesRequest:
+		resp, err = d.session.scopes(request)
+	//case *dap.SetBreakpointsRequest:
+	//	resp, err = d.session.setBreakpoints(request)
 	case *dap.StackTraceRequest:
 		resp, err = d.session.stackTrace(request)
 	case *dap.StepInRequest:
@@ -105,6 +113,8 @@ func (d *Debugger) handleMessage(message dap.Message) (bool, dap.ResponseMessage
 		resp, err = d.session.stepOut(request)
 	case *dap.ThreadsRequest:
 		resp, err = d.session.getThreads(request)
+	case *dap.VariablesRequest:
+		resp, err = d.session.variables(request)
 	default:
 		d.logger.Warn("Handler not found for request: %T", message)
 		err = fmt.Errorf("handler not found for request: %T", message)
@@ -214,7 +224,7 @@ func (d *Debugger) launchRunSession(props launchProperties) error {
 	}
 
 	// Threads are 1-indexed.
-	t := newThread(1, "main", tracer, d.logger)
+	t := newThread(1, "main", tracer, d.varManager, d.logger)
 	d.session = newSession(d, props, []*thread{t})
 
 	go func() {
@@ -569,6 +579,56 @@ func (s *session) newStackFrame(e *topdown.Event, t *thread, stackIndex int) *fr
 	return info
 }
 
+func (s *session) frame(id int) (*frameInfo, error) {
+	index := id - 1
+	if index < 0 || index >= len(s.frames) {
+		return nil, fmt.Errorf("invalid frame id: %d", id)
+	}
+	return s.frames[index], nil
+}
+
 func (s *session) evaluate(_ *dap.EvaluateRequest) (*dap.EvaluateResponse, error) {
 	return newEvaluateResponse(""), fmt.Errorf("evaluate not supported")
 }
+
+func (s *session) scopes(request *dap.ScopesRequest) (*dap.ScopesResponse, error) {
+	if s == nil {
+		return nil, fmt.Errorf("no active debug session")
+	}
+
+	f, err := s.frame(request.Arguments.FrameId)
+	if err != nil {
+		return nil, err
+	}
+
+	t, err := s.thread(f.threadId)
+	if err != nil {
+		return nil, err
+	}
+
+	return newScopesResponse(t.scopes(f.stackIndex)), nil
+}
+
+func (s *session) variables(request *dap.VariablesRequest) (*dap.VariablesResponse, error) {
+	if s == nil {
+		return nil, fmt.Errorf("no active debug session")
+	}
+
+	varRef := request.Arguments.VariablesReference
+	s.d.logger.Debug("Variables requested: %d", varRef)
+
+	vars, err := s.d.varManager.vars(request.Arguments.VariablesReference)
+	if err != nil {
+		return nil, err
+	}
+
+	return newVariablesResponse(vars), nil
+}
+
+//func (s *session) breakpointLocations(request *dap.BreakpointLocationsRequest) (*dap.BreakpointLocationsResponse, error) {
+//	return newBreakpointLocationsResponse([]dap.BreakpointLocation{}), nil
+//}
+
+//func (s *session) setBreakpoints(request *dap.SetBreakpointsRequest) (*dap.SetBreakpointsResponse, error) {
+//	return newSetBreakpointsResponse([]dap.Breakpoint{}), nil
+//}

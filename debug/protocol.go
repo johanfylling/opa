@@ -147,6 +147,36 @@ func newInitializeResponse(capabilities dap.Capabilities) *dap.InitializeRespons
 	}
 }
 
+func newBreakpointLocationsResponse(breakpoints []dap.BreakpointLocation) *dap.BreakpointLocationsResponse {
+	return &dap.BreakpointLocationsResponse{
+		Response: dap.Response{
+			ProtocolMessage: dap.ProtocolMessage{
+				Type: "response",
+			},
+			Command: "breakpointLocations",
+			Success: true,
+		},
+		Body: dap.BreakpointLocationsResponseBody{
+			Breakpoints: breakpoints,
+		},
+	}
+}
+
+func newSetBreakpointsResponse(breakpoints []dap.Breakpoint) *dap.SetBreakpointsResponse {
+	return &dap.SetBreakpointsResponse{
+		Response: dap.Response{
+			ProtocolMessage: dap.ProtocolMessage{
+				Type: "response",
+			},
+			Command: "setBreakpoints",
+			Success: true,
+		},
+		Body: dap.SetBreakpointsResponseBody{
+			Breakpoints: breakpoints,
+		},
+	}
+}
+
 func newDisconnectResponse() *dap.DisconnectResponse {
 	return &dap.DisconnectResponse{
 		Response: dap.Response{
@@ -186,6 +216,21 @@ func newLaunchResponse() *dap.LaunchResponse {
 	}
 }
 
+func newScopesResponse(scopes []dap.Scope) *dap.ScopesResponse {
+	return &dap.ScopesResponse{
+		Response: dap.Response{
+			ProtocolMessage: dap.ProtocolMessage{
+				Type: "response",
+			},
+			Command: "scopes",
+			Success: true,
+		},
+		Body: dap.ScopesResponseBody{
+			Scopes: scopes,
+		},
+	}
+}
+
 func newStackTraceResponse(stack []dap.StackFrame) *dap.StackTraceResponse {
 	return &dap.StackTraceResponse{
 		Response: dap.Response{
@@ -213,6 +258,21 @@ func newThreadsResponse(threads []dap.Thread) *dap.ThreadsResponse {
 		},
 		Body: dap.ThreadsResponseBody{
 			Threads: threads,
+		},
+	}
+}
+
+func newVariablesResponse(variables []dap.Variable) *dap.VariablesResponse {
+	return &dap.VariablesResponse{
+		Response: dap.Response{
+			ProtocolMessage: dap.ProtocolMessage{
+				Type: "response",
+			},
+			Command: "variables",
+			Success: true,
+		},
+		Body: dap.VariablesResponseBody{
+			Variables: variables,
 		},
 	}
 }

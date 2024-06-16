@@ -12,7 +12,7 @@ import (
 type stack interface {
 	topdown.QueryTracer
 	Current() (int, *topdown.Event)
-	Get(i int) *topdown.Event
+	Event(i int) *topdown.Event
 	Next() (int, *topdown.Event)
 	Result() rego.ResultSet
 }
@@ -67,7 +67,7 @@ func (dt *debugTracer) Current() (int, *topdown.Event) {
 	return -1, nil
 }
 
-func (dt *debugTracer) Get(i int) *topdown.Event {
+func (dt *debugTracer) Event(i int) *topdown.Event {
 	if i >= 0 && i < len(dt.history) {
 		return dt.history[i]
 	}

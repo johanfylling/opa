@@ -8,7 +8,10 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/google/go-dap"
+	"github.com/open-policy-agent/opa/ast"
 	"github.com/open-policy-agent/opa/logging"
+	"github.com/open-policy-agent/opa/rego"
 	"github.com/open-policy-agent/opa/topdown"
 )
 
@@ -24,15 +27,17 @@ type thread struct {
 	breakpointLatch latch
 	stopped         bool
 	state           threadState
+	varManager      *variableManager
 	logger          logging.Logger
 }
 
-func newThread(id int, name string, stack stack, logger logging.Logger) *thread {
+func newThread(id int, name string, stack stack, varManager *variableManager, logger logging.Logger) *thread {
 	return &thread{
-		id:     id,
-		name:   name,
-		stack:  stack,
-		logger: logger,
+		id:         id,
+		name:       name,
+		stack:      stack,
+		logger:     logger,
+		varManager: varManager,
 	}
 }
 
@@ -164,7 +169,7 @@ func (t *thread) stepOut() error {
 func (t *thread) stackEvents(from int) []*topdown.Event {
 	var events []*topdown.Event
 	for {
-		e := t.stack.Get(from)
+		e := t.stack.Event(from)
 		if e == nil {
 			break
 		}
@@ -172,6 +177,126 @@ func (t *thread) stackEvents(from int) []*topdown.Event {
 		from++
 	}
 	return events
+}
+
+func (t *thread) scopes(stackIndex int) []dap.Scope {
+	e := t.stack.Event(stackIndex)
+	if e == nil {
+		return nil
+	}
+
+	scopes := make([]dap.Scope, 0, 3)
+
+	// TODO: Clients are expected to keep track of fetched scopes and variable references (vs-code does),
+	// but it wouldn't hurt to not register the same var-getter callback more than once.
+	localScope := dap.Scope{
+		Name:               "Locals",
+		NamedVariables:     e.Locals.Len(),
+		VariablesReference: t.localVars(e),
+		Source: &dap.Source{
+			Name: e.Location.File,
+			Path: e.Location.File,
+		},
+		Line:    e.Location.Row,
+		EndLine: e.Location.Row,
+	}
+	scopes = append(scopes, localScope)
+
+	if e.Input() != nil {
+		inputScope := dap.Scope{
+			Name:               "Input",
+			NamedVariables:     1,
+			VariablesReference: t.inputVars(e),
+		}
+		scopes = append(scopes, inputScope)
+	}
+
+	if rs := t.stack.Result(); rs != nil {
+		resultScope := dap.Scope{
+			Name:               "Result Set",
+			NamedVariables:     1,
+			VariablesReference: t.resultVars(rs),
+		}
+		scopes = append(scopes, resultScope)
+	}
+
+	return scopes
+}
+
+func (t *thread) localVars(e *topdown.Event) int {
+	return t.varManager.addVars(func() []namedVar {
+		if e == nil {
+			return nil
+		}
+
+		vars := make([]namedVar, 0, e.Locals.Len())
+
+		e.Locals.Iter(func(k, v ast.Value) bool {
+			name := k.(ast.Var)
+			variable := namedVar{
+				Name:  string(name),
+				Value: v,
+			}
+
+			meta, ok := e.LocalMetadata[name]
+			if ok {
+				variable.Name = string(meta.Name)
+			}
+
+			vars = append(vars, variable)
+			return false
+		})
+
+		return vars
+	})
+}
+
+func (t *thread) inputVars(e *topdown.Event) int {
+	return t.varManager.addVars(func() []namedVar {
+		input := e.Input()
+		if input == nil {
+			return nil
+		}
+
+		return []namedVar{{Name: "input", Value: input.Value}}
+	})
+}
+
+func (t *thread) resultVars(rs rego.ResultSet) int {
+	vars := make([]namedVar, 0, len(rs))
+	for i, result := range rs {
+		bindings, err := ast.InterfaceToValue(result.Bindings)
+		if err != nil {
+			continue
+		}
+
+		expressions := &ast.Array{}
+		for _, expr := range result.Expressions {
+			t := ast.StringTerm(expr.Text)
+			v, err := ast.InterfaceToValue(expr.Value)
+			if err != nil {
+				continue
+			}
+			expressions = expressions.Append(ast.NewTerm(ast.NewObject(
+				ast.Item(ast.StringTerm("text"), t),
+				ast.Item(ast.StringTerm("value"), ast.NewTerm(v)),
+			)))
+		}
+
+		res := ast.NewObject(
+			ast.Item(ast.StringTerm("bindings"), ast.NewTerm(bindings)),
+			ast.Item(ast.StringTerm("expressions"), ast.NewTerm(expressions)),
+		)
+
+		vars = append(vars, namedVar{
+			Name:  fmt.Sprintf("%d", i),
+			Value: res,
+		})
+	}
+
+	return t.varManager.addVars(func() []namedVar {
+		return vars
+	})
 }
 
 func (t *thread) stop() {
