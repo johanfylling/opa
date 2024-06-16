@@ -18,6 +18,7 @@ import (
 	"github.com/open-policy-agent/opa/logging"
 	"github.com/open-policy-agent/opa/rego"
 	"github.com/open-policy-agent/opa/topdown"
+	prnt "github.com/open-policy-agent/opa/topdown/print"
 )
 
 type Debugger struct {
@@ -27,6 +28,20 @@ type Debugger struct {
 	serverCapabilities dap.Capabilities
 	clientCapabilities dap.InitializeRequestArguments
 	logger             *debugLogger
+	printHook          *printHook
+}
+
+type printHook struct {
+	prnt.Hook
+	d *Debugger
+}
+
+func (h *printHook) Print(_ prnt.Context, str string) error {
+	if h == nil || h.d == nil {
+		return nil
+	}
+	h.d.protocolManager.sendEvent(newOutputEvent("stdout", str))
+	return nil
 }
 
 func NewDebugger(options ...func(*Debugger)) *Debugger {
@@ -42,6 +57,7 @@ func NewDebugger(options ...func(*Debugger)) *Debugger {
 		},
 		logger: newDebugLogger(logging.NewNoOpLogger(), logging.Info),
 	}
+	d.printHook = &printHook{d: d}
 
 	for _, option := range options {
 		option(d)
@@ -124,6 +140,7 @@ type launchProperties struct {
 	StopOnEntry  bool     `json:"stop_on_entry"`
 	StopOnFail   bool     `json:"stop_on_fail"`
 	Workspace    string   `json:"workspace"`
+	EnablePrint  bool     `json:"enable_print"`
 }
 
 func (d *Debugger) launch(r *dap.LaunchRequest) (*dap.LaunchResponse, error) {
@@ -158,6 +175,11 @@ func (d *Debugger) launchRunSession(props launchProperties) error {
 
 	regoArgs := []func(*rego.Rego){
 		rego.Query(props.Query),
+	}
+
+	if props.EnablePrint {
+		regoArgs = append(regoArgs, rego.EnablePrintStatements(true),
+			rego.PrintHook(d.printHook))
 	}
 
 	if len(props.DataPaths) > 0 {
