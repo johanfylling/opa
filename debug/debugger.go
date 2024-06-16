@@ -87,8 +87,8 @@ func (d *Debugger) handleMessage(message dap.Message) (bool, dap.ResponseMessage
 	switch request := message.(type) {
 	case *dap.AttachRequest:
 		resp, err = d.attach(request)
-	//case *dap.BreakpointLocationsRequest:
-	//	resp, err = d.session.breakpointLocations(request)
+	case *dap.BreakpointLocationsRequest:
+		resp, err = d.session.breakpointLocations(request)
 	case *dap.ContinueRequest:
 		resp, err = d.session.resume(request)
 	case *dap.DisconnectRequest:
@@ -103,8 +103,8 @@ func (d *Debugger) handleMessage(message dap.Message) (bool, dap.ResponseMessage
 		resp, err = d.session.next(request)
 	case *dap.ScopesRequest:
 		resp, err = d.session.scopes(request)
-	//case *dap.SetBreakpointsRequest:
-	//	resp, err = d.session.setBreakpoints(request)
+	case *dap.SetBreakpointsRequest:
+		resp, err = d.session.setBreakpoints(request)
 	case *dap.StackTraceRequest:
 		resp, err = d.session.stackTrace(request)
 	case *dap.StepInRequest:
@@ -174,6 +174,8 @@ func (d *Debugger) launch(r *dap.LaunchRequest) (*dap.LaunchResponse, error) {
 	default:
 		err = fmt.Errorf("unsupported launch command: '%s'", r.Command)
 	}
+
+	d.protocolManager.sendEvent(newInitializedEvent())
 
 	return newLaunchResponse(), err
 }
@@ -277,12 +279,86 @@ type frameInfo struct {
 	stackIndex int
 }
 
+type breakpointList []dap.Breakpoint
+
+func (b breakpointList) String() string {
+	if b == nil {
+		return "[]"
+	}
+
+	buf := new(bytes.Buffer)
+	buf.WriteString("[")
+	for i, bp := range b {
+		if i > 0 {
+			buf.WriteString(", ")
+		}
+		_, _ = fmt.Fprintf(buf, "%s:%d", bp.Source.Path, bp.Line)
+	}
+	buf.WriteString("]")
+	return buf.String()
+}
+
+type breakpointCollection struct {
+	breakpoints map[string]breakpointList
+	idCounter   int
+}
+
+func newBreakpointCollection() *breakpointCollection {
+	return &breakpointCollection{
+		breakpoints: map[string]breakpointList{},
+	}
+}
+
+func (bc *breakpointCollection) newId() int {
+	bc.idCounter++
+	return bc.idCounter
+}
+
+func (bc *breakpointCollection) add(bp dap.Breakpoint) {
+	bp.Id = bc.newId()
+	bps := bc.breakpoints[bp.Source.Path]
+	bps = append(bps, bp)
+	bc.breakpoints[bp.Source.Path] = bps
+}
+
+func (bc *breakpointCollection) allForSource(s *dap.Source) breakpointList {
+	return bc.allForFilePath(s.Path)
+}
+
+func (bc *breakpointCollection) allForFilePath(path string) breakpointList {
+	return bc.breakpoints[path]
+}
+
+func (bc *breakpointCollection) clear() {
+	bc.breakpoints = map[string]breakpointList{}
+}
+
+func (bc *breakpointCollection) String() string {
+	if bc == nil {
+		return "[]"
+	}
+
+	buf := new(bytes.Buffer)
+	buf.WriteString("[")
+	for path, bps := range bc.breakpoints {
+		for i, bp := range bps {
+			if i > 0 {
+				buf.WriteString(", ")
+			}
+			_, _ = fmt.Fprintf(buf, "%s:%d\n", path, bp.Line)
+		}
+	}
+	buf.WriteString("]")
+	return buf.String()
+}
+
 type session struct {
 	d              *Debugger
 	properties     launchProperties
 	threads        []*thread
 	frames         []*frameInfo
 	framesByThread map[int][]*frameInfo
+	breakpoints    *breakpointCollection
 }
 
 func newSession(debugger *Debugger, props launchProperties, threads []*thread) *session {
@@ -292,6 +368,7 @@ func newSession(debugger *Debugger, props launchProperties, threads []*thread) *
 		threads:        threads,
 		frames:         []*frameInfo{},
 		framesByThread: map[int][]*frameInfo{},
+		breakpoints:    newBreakpointCollection(),
 	}
 }
 
@@ -492,6 +569,16 @@ func (s *session) handleEvent(t *thread, e *topdown.Event, ts threadState) (bool
 		return true, state, nil
 	}
 
+	if e.Location != nil && e.Location.File != "" {
+		for _, bp := range s.breakpoints.allForFilePath(e.Location.File) {
+			if bp.Line == e.Location.Row {
+				s.d.logger.Info("Thread %d stopped at breakpoint: %s:%d", t.id, e.Location.File, e.Location.Row)
+				s.d.protocolManager.sendEvent(newStoppedBreakpointEvent(t.id, &bp))
+				return true, state, nil
+			}
+		}
+	}
+
 	return false, state, nil
 }
 
@@ -625,10 +712,33 @@ func (s *session) variables(request *dap.VariablesRequest) (*dap.VariablesRespon
 	return newVariablesResponse(vars), nil
 }
 
-//func (s *session) breakpointLocations(request *dap.BreakpointLocationsRequest) (*dap.BreakpointLocationsResponse, error) {
-//	return newBreakpointLocationsResponse([]dap.BreakpointLocation{}), nil
-//}
+func (s *session) breakpointLocations(request *dap.BreakpointLocationsRequest) (*dap.BreakpointLocationsResponse, error) {
+	line := request.Arguments.Line
+	s.d.logger.Debug("Breakpoint locations requested for: %s:%d", request.Arguments.Source.Name, line)
 
-//func (s *session) setBreakpoints(request *dap.SetBreakpointsRequest) (*dap.SetBreakpointsResponse, error) {
-//	return newSetBreakpointsResponse([]dap.Breakpoint{}), nil
-//}
+	// TODO: Actually assert where breakpoints can be placed.
+	return newBreakpointLocationsResponse([]dap.BreakpointLocation{
+		{
+			Line:   line,
+			Column: 1,
+		},
+	}), nil
+}
+
+func (s *session) setBreakpoints(request *dap.SetBreakpointsRequest) (*dap.SetBreakpointsResponse, error) {
+	source := request.Arguments.Source
+	s.d.logger.Debug("Clearing existing breakpoints for source %s: %v",
+		source.Name, s.breakpoints.allForSource(&source))
+	s.breakpoints.clear()
+
+	for _, bp := range request.Arguments.Breakpoints {
+		s.breakpoints.add(dap.Breakpoint{
+			Source:   &request.Arguments.Source,
+			Verified: true,
+			Line:     bp.Line,
+			Column:   bp.Column,
+		})
+	}
+
+	return newSetBreakpointsResponse(s.breakpoints.allForSource(&source)), nil
+}

@@ -279,6 +279,17 @@ func newVariablesResponse(variables []dap.Variable) *dap.VariablesResponse {
 
 // Events
 
+func newInitializedEvent() *dap.InitializedEvent {
+	return &dap.InitializedEvent{
+		Event: dap.Event{
+			ProtocolMessage: dap.ProtocolMessage{
+				Type: "event",
+			},
+			Event: "initialized",
+		},
+	}
+}
+
 func newOutputEvent(category string, output string) *dap.OutputEvent {
 	return &dap.OutputEvent{
 		Event: dap.Event{
@@ -326,6 +337,10 @@ func newStoppedEntryEvent(threadId int) *dap.StoppedEvent {
 
 func newStoppedResultEvent(threadId int) *dap.StoppedEvent {
 	return newStoppedEvent("result", threadId, nil, "", "")
+}
+
+func newStoppedBreakpointEvent(threadId int, bp *dap.Breakpoint) *dap.StoppedEvent {
+	return newStoppedEvent("breakpoint", threadId, []int{bp.Id}, "", "")
 }
 
 func newStoppedEvent(reason string, threadId int, bps []int, description string, text string) *dap.StoppedEvent {
