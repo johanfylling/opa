@@ -141,7 +141,7 @@ func (d *Debugger) initialize(r *dap.InitializeRequest) (*dap.InitializeResponse
 }
 
 func (d *Debugger) attach(r *dap.AttachRequest) (*dap.AttachResponse, error) {
-	return &dap.AttachResponse{}, nil
+	return newAttachResponse(), fmt.Errorf("attach not supported")
 }
 
 type launchProperties struct {

@@ -147,6 +147,18 @@ func newInitializeResponse(capabilities dap.Capabilities) *dap.InitializeRespons
 	}
 }
 
+func newAttachResponse() *dap.AttachResponse {
+	return &dap.AttachResponse{
+		Response: dap.Response{
+			ProtocolMessage: dap.ProtocolMessage{
+				Type: "response",
+			},
+			Command: "attach",
+			Success: true,
+		},
+	}
+}
+
 func newBreakpointLocationsResponse(breakpoints []dap.BreakpointLocation) *dap.BreakpointLocationsResponse {
 	return &dap.BreakpointLocationsResponse{
 		Response: dap.Response{
