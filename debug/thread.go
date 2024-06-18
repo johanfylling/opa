@@ -299,8 +299,10 @@ func (t *thread) resultVars(rs rego.ResultSet) int {
 	})
 }
 
-func (t *thread) stop() {
+func (t *thread) stop() error {
 	t.stopped = true
+	t.breakpointLatch.Close()
+	return t.stack.Close()
 }
 
 func (t *thread) done() bool {

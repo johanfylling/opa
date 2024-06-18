@@ -15,6 +15,7 @@ type stack interface {
 	Event(i int) *topdown.Event
 	Next() (int, *topdown.Event)
 	Result() rego.ResultSet
+	Close() error
 }
 
 type debugTracer struct {

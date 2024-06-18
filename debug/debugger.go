@@ -8,6 +8,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -89,6 +90,9 @@ func (d *Debugger) handleMessage(message dap.Message) (bool, dap.ResponseMessage
 		resp, err = d.attach(request)
 	case *dap.BreakpointLocationsRequest:
 		resp, err = d.session.breakpointLocations(request)
+	case *dap.ConfigurationDoneRequest:
+		// FIXME: Is this when we should start eval?
+		resp = newConfigurationDoneResponse()
 	case *dap.ContinueRequest:
 		resp, err = d.session.resume(request)
 	case *dap.DisconnectRequest:
@@ -111,6 +115,8 @@ func (d *Debugger) handleMessage(message dap.Message) (bool, dap.ResponseMessage
 		resp, err = d.session.stepIn(request)
 	case *dap.StepOutRequest:
 		resp, err = d.session.stepOut(request)
+	case *dap.TerminateRequest:
+		resp, err = d.terminate(request)
 	case *dap.ThreadsRequest:
 		resp, err = d.session.getThreads(request)
 	case *dap.VariablesRequest:
@@ -175,7 +181,9 @@ func (d *Debugger) launch(r *dap.LaunchRequest) (*dap.LaunchResponse, error) {
 		err = fmt.Errorf("unsupported launch command: '%s'", r.Command)
 	}
 
-	d.protocolManager.sendEvent(newInitializedEvent())
+	if err == nil {
+		d.protocolManager.sendEvent(newInitializedEvent())
+	}
 
 	return newLaunchResponse(), err
 }
@@ -230,14 +238,18 @@ func (d *Debugger) launchRunSession(props launchProperties) error {
 	d.session = newSession(d, props, []*thread{t})
 
 	go func() {
-		rs, err := pq.Eval(d.ctx, evalArgs...)
-		if err != nil {
-			d.logger.Error("Evaluation failed: %v", err)
+		defer func() { _ = tracer.Close() }()
+		rs, evalErr := pq.Eval(d.session.ctx, evalArgs...)
+		if evalErr != nil {
+			var topdownErr *topdown.Error
+			if errors.As(evalErr, &topdownErr) && topdownErr.Code == topdown.CancelErr {
+				return
+			}
+			d.logger.Error("Evaluation failed: %v", evalErr)
 			return
 		}
 
 		tracer.resultSet = rs
-		_ = tracer.Close()
 		d.session.result(t, rs)
 	}()
 
@@ -359,9 +371,12 @@ type session struct {
 	frames         []*frameInfo
 	framesByThread map[int][]*frameInfo
 	breakpoints    *breakpointCollection
+	ctx            context.Context
+	cancel         context.CancelFunc
 }
 
 func newSession(debugger *Debugger, props launchProperties, threads []*thread) *session {
+	ctx, cancel := context.WithCancel(debugger.ctx)
 	return &session{
 		d:              debugger,
 		properties:     props,
@@ -369,6 +384,8 @@ func newSession(debugger *Debugger, props launchProperties, threads []*thread) *
 		frames:         []*frameInfo{},
 		framesByThread: map[int][]*frameInfo{},
 		breakpoints:    newBreakpointCollection(),
+		ctx:            ctx,
+		cancel:         cancel,
 	}
 }
 
@@ -713,6 +730,10 @@ func (s *session) variables(request *dap.VariablesRequest) (*dap.VariablesRespon
 }
 
 func (s *session) breakpointLocations(request *dap.BreakpointLocationsRequest) (*dap.BreakpointLocationsResponse, error) {
+	if s == nil {
+		return nil, fmt.Errorf("no active debug session")
+	}
+
 	line := request.Arguments.Line
 	s.d.logger.Debug("Breakpoint locations requested for: %s:%d", request.Arguments.Source.Name, line)
 
@@ -726,6 +747,10 @@ func (s *session) breakpointLocations(request *dap.BreakpointLocationsRequest) (
 }
 
 func (s *session) setBreakpoints(request *dap.SetBreakpointsRequest) (*dap.SetBreakpointsResponse, error) {
+	if s == nil {
+		return nil, fmt.Errorf("no active debug session")
+	}
+
 	source := request.Arguments.Source
 	s.d.logger.Debug("Clearing existing breakpoints for source %s: %v",
 		source.Name, s.breakpoints.allForSource(&source))
@@ -741,4 +766,34 @@ func (s *session) setBreakpoints(request *dap.SetBreakpointsRequest) (*dap.SetBr
 	}
 
 	return newSetBreakpointsResponse(s.breakpoints.allForSource(&source)), nil
+}
+
+func (d *Debugger) terminate(r *dap.TerminateRequest) (*dap.TerminateResponse, error) {
+	resp, err := d.session.terminate(r)
+	d.session = nil
+	return resp, err
+}
+
+func (s *session) terminate(_ *dap.TerminateRequest) (*dap.TerminateResponse, error) {
+	if s == nil {
+		return nil, fmt.Errorf("no active debug session")
+	}
+
+	s.cancel()
+
+	var hasErrors bool
+	for _, t := range s.threads {
+		if err := t.stop(); err != nil {
+			hasErrors = true
+			s.d.logger.Error("Failed to stop thread %d: %v", t.id, err)
+		} else {
+			s.d.protocolManager.sendEvent(newThreadEvent(t.id, "exited"))
+		}
+	}
+
+	if !hasErrors {
+		s.d.protocolManager.sendEvent(newTerminatedEvent())
+	}
+
+	return newTerminateResponse(), nil
 }

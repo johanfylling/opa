@@ -177,6 +177,18 @@ func newSetBreakpointsResponse(breakpoints []dap.Breakpoint) *dap.SetBreakpoints
 	}
 }
 
+func newConfigurationDoneResponse() *dap.ConfigurationDoneResponse {
+	return &dap.ConfigurationDoneResponse{
+		Response: dap.Response{
+			ProtocolMessage: dap.ProtocolMessage{
+				Type: "response",
+			},
+			Command: "configurationDone",
+			Success: true,
+		},
+	}
+}
+
 func newDisconnectResponse() *dap.DisconnectResponse {
 	return &dap.DisconnectResponse{
 		Response: dap.Response{
@@ -243,6 +255,18 @@ func newStackTraceResponse(stack []dap.StackFrame) *dap.StackTraceResponse {
 		Body: dap.StackTraceResponseBody{
 			StackFrames: stack,
 			TotalFrames: len(stack),
+		},
+	}
+}
+
+func newTerminateResponse() *dap.TerminateResponse {
+	return &dap.TerminateResponse{
+		Response: dap.Response{
+			ProtocolMessage: dap.ProtocolMessage{
+				Type: "response",
+			},
+			Command: "terminate",
+			Success: true,
 		},
 	}
 }
