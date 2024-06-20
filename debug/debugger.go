@@ -145,7 +145,6 @@ func (d *Debugger) attach(r *dap.AttachRequest) (*dap.AttachResponse, error) {
 }
 
 type launchProperties struct {
-	//Args        []string `json:"args"`
 	BundlePaths  []string `json:"bundles"`
 	Command      string   `json:"command"`
 	DataPaths    []string `json:"data"`
@@ -155,7 +154,6 @@ type launchProperties struct {
 	StopOnResult bool     `json:"stop_on_result"`
 	StopOnEntry  bool     `json:"stop_on_entry"`
 	StopOnFail   bool     `json:"stop_on_fail"`
-	Workspace    string   `json:"workspace"`
 	EnablePrint  bool     `json:"enable_print"`
 }
 
