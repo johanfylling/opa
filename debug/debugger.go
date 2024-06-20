@@ -165,6 +165,8 @@ func (d *Debugger) launch(r *dap.LaunchRequest) (*dap.LaunchResponse, error) {
 
 	if props.LogLevel != "" {
 		d.logger.setLevelFromString(props.LogLevel)
+	} else {
+		d.logger.setRemoteEnabled(false)
 	}
 
 	var err error
