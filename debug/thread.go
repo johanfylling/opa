@@ -17,7 +17,15 @@ import (
 
 type threadState interface{}
 
-type eventHandler func(t *thread, e *topdown.Event, s threadState) (bool, threadState, error)
+type eventAction string
+
+const (
+	nopAction   eventAction = "nop"
+	breakAction eventAction = "break"
+	skipAction  eventAction = "skip"
+)
+
+type eventHandler func(t *thread, e *topdown.Event, s threadState) (eventAction, threadState, error)
 
 type thread struct {
 	id              int
@@ -80,15 +88,15 @@ func (t *thread) stepIn() error {
 	}
 
 	id, e := t.stack.Next()
-	t.logger.Debug("Stepping in to event: #%d", id)
+	t.logger.Debug("Step-in on event: #%d", id)
 
-	br, s, err := t.eventHandler(t, e, t.state)
+	a, s, err := t.eventHandler(t, e, t.state)
 	if err != nil {
 		return err
 	}
 	t.state = s
 
-	if br {
+	if a == breakAction {
 		t.logger.Debug("Blocking breakpoint latch")
 		t.breakpointLatch.block()
 	}
@@ -101,30 +109,56 @@ func (t *thread) stepOver() error {
 		return fmt.Errorf("thread stopped")
 	}
 
-	c, err := t.current()
+	startE, err := t.current()
 	if err != nil {
 		return err
 	}
 
+	baseQueryVisited := false
+Loop:
 	for {
 		id, e := t.stack.Next()
-		if c == nil || e != nil && e.QueryID <= c.QueryID {
-			t.logger.Debug("Stepping over to event: #%d", id)
-		} else {
-			t.logger.Debug("Stepping over event: #%d", id)
+		t.logger.Debug("Step-over on event: #%d", id)
+
+		if e != nil && e.QueryID == 0 {
+			baseQueryVisited = true
 		}
 
-		br, s, err := t.eventHandler(t, e, t.state)
+		a, s, err := t.eventHandler(t, e, t.state)
 		if err != nil {
 			return err
 		}
 		t.state = s
 
-		if br || e == nil || c != nil && e.QueryID <= c.QueryID {
-			t.logger.Debug("Resuming on query: %d", e.QueryID)
-			break
-		} else {
-			t.logger.Debug("Continuing past query: %d", e.QueryID)
+		if a == skipAction {
+			continue
+		}
+
+		var quid uint64 = 0
+		if e != nil {
+			quid = e.QueryID
+		}
+
+		switch {
+		case startE == nil:
+			t.logger.Debug("Resuming on query: %d; first event", quid)
+			break Loop
+		case a == breakAction:
+			t.logger.Debug("Resuming on query: %d; break-action", quid)
+			break Loop
+		case e == nil:
+			t.logger.Debug("Resuming on query: %d; no event", quid)
+			break Loop
+		case e.QueryID == 0:
+			t.logger.Debug("Continuing past query: %d; base-query", quid)
+		case e.QueryID <= startE.QueryID:
+			t.logger.Debug("Resuming on query: %d; start-query: %d", quid, startE.QueryID)
+			break Loop
+		case baseQueryVisited:
+			t.logger.Debug("Resuming on query: %d; base-query visited", quid)
+			break Loop
+		default:
+			t.logger.Debug("Continuing past query: %d", quid)
 		}
 	}
 
@@ -143,19 +177,19 @@ func (t *thread) stepOut() error {
 
 	for {
 		id, e := t.stack.Next()
-		if c == nil || e != nil && e.QueryID < c.QueryID {
-			t.logger.Debug("Stepping out to event: #%d", id)
-		} else {
-			t.logger.Debug("Stepping out event: #%d", id)
-		}
+		t.logger.Debug("Step-out on event: #%d", id)
 
-		br, s, err := t.eventHandler(t, e, t.state)
+		a, s, err := t.eventHandler(t, e, t.state)
 		if err != nil {
 			return err
 		}
 		t.state = s
 
-		if br || e == nil || e.QueryID < c.QueryID {
+		if a == skipAction {
+			continue
+		}
+
+		if a == breakAction || e == nil || e.QueryID < c.QueryID {
 			t.logger.Debug("Resuming on query: %d", e.QueryID)
 			break
 		} else {

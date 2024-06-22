@@ -145,16 +145,25 @@ func (d *Debugger) attach(r *dap.AttachRequest) (*dap.AttachResponse, error) {
 }
 
 type launchProperties struct {
-	BundlePaths  []string `json:"bundles"`
-	Command      string   `json:"command"`
-	DataPaths    []string `json:"data"`
-	InputPath    string   `json:"input"`
-	LogLevel     string   `json:"log_level"`
-	Query        string   `json:"query"`
-	StopOnResult bool     `json:"stop_on_result"`
-	StopOnEntry  bool     `json:"stop_on_entry"`
-	StopOnFail   bool     `json:"stop_on_fail"`
-	EnablePrint  bool     `json:"enable_print"`
+	BundlePaths  []string     `json:"bundles"`
+	Command      string       `json:"command"`
+	DataPaths    []string     `json:"data"`
+	InputPath    string       `json:"input"`
+	LogLevel     string       `json:"log_level"`
+	Query        string       `json:"query"`
+	StopOnResult bool         `json:"stop_on_result"`
+	StopOnEntry  bool         `json:"stop_on_entry"`
+	StopOnFail   bool         `json:"stop_on_fail"`
+	EnablePrint  bool         `json:"enable_print"`
+	SkipOps      []topdown.Op `json:"skip_ops"`
+}
+
+func (lp launchProperties) String() string {
+	b, err := json.Marshal(lp)
+	if err != nil {
+		return fmt.Sprintf("{}")
+	}
+	return string(b)
 }
 
 func (d *Debugger) launch(r *dap.LaunchRequest) (*dap.LaunchResponse, error) {
@@ -168,6 +177,12 @@ func (d *Debugger) launch(r *dap.LaunchRequest) (*dap.LaunchResponse, error) {
 	} else {
 		d.logger.setRemoteEnabled(false)
 	}
+
+	if props.SkipOps == nil {
+		props.SkipOps = []topdown.Op{topdown.IndexOp, topdown.RedoOp, topdown.SaveOp, topdown.UnifyOp}
+	}
+
+	d.logger.Info("Launching: %s", props)
 
 	var err error
 	switch props.Command {
@@ -541,11 +556,16 @@ func (s *session) getThreads(_ *dap.ThreadsRequest) (*dap.ThreadsResponse, error
 
 type sessionThreadState struct {
 	threadState
-	entered bool
-	ended   bool
+	entered     bool
+	ended       bool
+	prevQueryId uint64
 }
 
-func (s *session) handleEvent(t *thread, e *topdown.Event, ts threadState) (bool, threadState, error) {
+func (s *sessionThreadState) String() string {
+	return fmt.Sprintf("{entered: %v, ended: %v, prevQueryId: %d}", s.entered, s.ended, s.prevQueryId)
+}
+
+func (s *session) handleEvent(t *thread, e *topdown.Event, ts threadState) (eventAction, threadState, error) {
 	state, ok := ts.(*sessionThreadState)
 	if state != nil && !ok {
 		s.d.logger.Warn("invalid thread state: %v", s)
@@ -554,10 +574,18 @@ func (s *session) handleEvent(t *thread, e *topdown.Event, ts threadState) (bool
 		state = &sessionThreadState{}
 	}
 
+	defer func() {
+		if e != nil {
+			state.prevQueryId = e.QueryID
+		} else {
+			state.prevQueryId = 0
+		}
+	}()
+
 	if e == nil {
-		handleEnd := func() (bool, threadState, error) {
+		handleEnd := func() (eventAction, threadState, error) {
 			t.stop()
-			return false, state, fmt.Errorf("end of trace")
+			return nopAction, state, fmt.Errorf("end of trace")
 		}
 
 		if state.ended {
@@ -571,19 +599,25 @@ func (s *session) handleEvent(t *thread, e *topdown.Event, ts threadState) (bool
 		if s.properties.StopOnResult {
 			s.d.logger.Info("Thread %d stopped at end of trace", t.id)
 			s.d.protocolManager.sendEvent(newStoppedResultEvent(t.id))
-			return true, state, nil
+			return breakAction, state, nil
 		}
 
 		return handleEnd()
 	}
 
-	s.d.logger.Debug("Handling event: #%v", e)
+	s.d.logger.Debug("Handling event:\n%v\n\nstate:\n%s", e, state)
+
+	if s.skipOp(e.Op) && (state.prevQueryId == 0 || e.Op == topdown.RedoOp || e.QueryID == state.prevQueryId) {
+		// We only skip an event as long as we're within the same query scope.
+		s.d.logger.Debug("Skipping event (op: %v)", e.Op)
+		return skipAction, state, nil
+	}
 
 	if s.properties.StopOnEntry && !state.entered && e.Location.File != "" {
 		state.entered = true
 		s.d.logger.Info("Thread %d stopped at entry", t.id)
 		s.d.protocolManager.sendEvent(newStoppedEntryEvent(t.id))
-		return true, state, nil
+		return breakAction, state, nil
 	}
 
 	if e.Location != nil && e.Location.File != "" {
@@ -591,20 +625,29 @@ func (s *session) handleEvent(t *thread, e *topdown.Event, ts threadState) (bool
 			if bp.Line == e.Location.Row {
 				s.d.logger.Info("Thread %d stopped at breakpoint: %s:%d", t.id, e.Location.File, e.Location.Row)
 				s.d.protocolManager.sendEvent(newStoppedBreakpointEvent(t.id, &bp))
-				return true, state, nil
+				return breakAction, state, nil
 			}
 		}
 	}
 
-	return false, state, nil
+	return nopAction, state, nil
+}
+
+func (s *session) skipOp(op topdown.Op) bool {
+	for _, skip := range s.properties.SkipOps {
+		if skip == op {
+			return true
+		}
+	}
+	return false
 }
 
 func (s *session) result(t *thread, rs rego.ResultSet) {
 	if rsJson, err := json.MarshalIndent(rs, "", "  "); err == nil {
-		s.d.logger.Info("Result: %s\n", rsJson)
+		s.d.logger.Debug("Result: %s\n", rsJson)
 		s.d.protocolManager.sendEvent(newOutputEvent("stdout", string(rsJson)))
 	} else {
-		s.d.logger.Info("Result: %v\n", rs)
+		s.d.logger.Debug("Result: %v\n", rs)
 	}
 }
 
