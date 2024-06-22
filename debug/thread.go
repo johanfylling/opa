@@ -23,6 +23,7 @@ const (
 	nopAction   eventAction = "nop"
 	breakAction eventAction = "break"
 	skipAction  eventAction = "skip"
+	stopAction  eventAction = "stop"
 )
 
 type eventHandler func(t *thread, e *topdown.Event, s threadState) (eventAction, threadState, error)
@@ -52,7 +53,7 @@ func newThread(id int, name string, stack stack, varManager *variableManager, lo
 func (t *thread) run(ctx context.Context) error {
 	for {
 		if t.stopped {
-			return fmt.Errorf("thread stopped")
+			return nil
 		}
 
 		select {
@@ -134,31 +135,31 @@ Loop:
 			continue
 		}
 
-		var quid uint64 = 0
+		var qid uint64 = 0
 		if e != nil {
-			quid = e.QueryID
+			qid = e.QueryID
 		}
 
 		switch {
 		case startE == nil:
-			t.logger.Debug("Resuming on query: %d; first event", quid)
+			t.logger.Debug("Resuming on query: %d; first event", qid)
 			break Loop
 		case a == breakAction:
-			t.logger.Debug("Resuming on query: %d; break-action", quid)
+			t.logger.Debug("Resuming on query: %d; break-action", qid)
 			break Loop
 		case e == nil:
-			t.logger.Debug("Resuming on query: %d; no event", quid)
+			t.logger.Debug("Resuming on query: %d; no event", qid)
 			break Loop
 		case e.QueryID == 0:
-			t.logger.Debug("Continuing past query: %d; base-query", quid)
+			t.logger.Debug("Continuing past query: %d; base-query", qid)
 		case e.QueryID <= startE.QueryID:
-			t.logger.Debug("Resuming on query: %d; start-query: %d", quid, startE.QueryID)
+			t.logger.Debug("Resuming on query: %d; start-query: %d", qid, startE.QueryID)
 			break Loop
 		case baseQueryVisited:
-			t.logger.Debug("Resuming on query: %d; base-query visited", quid)
+			t.logger.Debug("Resuming on query: %d; base-query visited", qid)
 			break Loop
 		default:
-			t.logger.Debug("Continuing past query: %d", quid)
+			t.logger.Debug("Continuing past query: %d", qid)
 		}
 	}
 
@@ -189,11 +190,16 @@ func (t *thread) stepOut() error {
 			continue
 		}
 
-		if a == breakAction || e == nil || e.QueryID < c.QueryID {
-			t.logger.Debug("Resuming on query: %d", e.QueryID)
+		var qid uint64 = 0
+		if e != nil {
+			qid = e.QueryID
+		}
+
+		if a == breakAction || e == nil || c != nil && qid < c.QueryID {
+			t.logger.Debug("Resuming on query: %d", qid)
 			break
 		} else {
-			t.logger.Debug("Continuing past query: %d", e.QueryID)
+			t.logger.Debug("Continuing past query: %d", qid)
 		}
 	}
 

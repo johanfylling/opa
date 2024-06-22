@@ -411,8 +411,8 @@ func (s *session) start(ctx context.Context) {
 			s.d.protocolManager.sendEvent(newThreadEvent(t.id, "started"))
 			if err := t.run(ctx); err != nil {
 				s.d.logger.Error("Thread %d failed: %v", t.id, err)
-				s.d.protocolManager.sendEvent(newThreadEvent(t.id, "exited"))
 			}
+			s.d.protocolManager.sendEvent(newThreadEvent(t.id, "exited"))
 
 			for _, t := range s.threads {
 				if !t.done() {
@@ -585,7 +585,7 @@ func (s *session) handleEvent(t *thread, e *topdown.Event, ts threadState) (even
 	if e == nil {
 		handleEnd := func() (eventAction, threadState, error) {
 			t.stop()
-			return nopAction, state, fmt.Errorf("end of trace")
+			return stopAction, state, nil
 		}
 
 		if state.ended {
