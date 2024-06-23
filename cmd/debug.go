@@ -7,7 +7,9 @@ package cmd
 import (
 	"context"
 	"fmt"
+	"io"
 	"net"
+	"os"
 
 	"github.com/open-policy-agent/opa/debug"
 	"github.com/open-policy-agent/opa/logging"
@@ -45,9 +47,45 @@ func init() {
 	RootCommand.AddCommand(debugCommand)
 }
 
+type cmdConn struct {
+	in  io.ReadCloser
+	out io.WriteCloser
+}
+
+func newCmdConn(in io.ReadCloser, out io.WriteCloser) *cmdConn {
+	return &cmdConn{
+		in:  in,
+		out: out,
+	}
+}
+
+func (c *cmdConn) Read(p []byte) (n int, err error) {
+	return c.in.Read(p)
+}
+
+func (c *cmdConn) Write(p []byte) (n int, err error) {
+	return c.out.Write(p)
+}
+
+func (c *cmdConn) Close() error {
+	var errs []error
+	if err := c.in.Close(); err != nil {
+		errs = append(errs, err)
+	}
+	if err := c.out.Close(); err != nil {
+		errs = append(errs, err)
+	}
+	if len(errs) > 0 {
+		return fmt.Errorf("errors: %v", errs)
+	}
+	return nil
+}
+
 func startDebugger(ctx context.Context, params debugParams) error {
 	if !params.server {
-		return fmt.Errorf("debugger must be run in server mode")
+		conn := newCmdConn(os.Stdin, os.Stdout)
+		d := debug.NewDebugger(debug.Logger(params.logger))
+		return d.Start(ctx, conn)
 	}
 
 	listener, err := net.Listen("tcp", params.address)

@@ -620,6 +620,12 @@ func (s *session) handleEvent(t *thread, e *topdown.Event, ts threadState) (even
 		return breakAction, state, nil
 	}
 
+	if s.properties.StopOnFail && e.Op == topdown.FailOp {
+		s.d.logger.Info("Thread %d stopped on failure", t.id)
+		s.d.protocolManager.sendEvent(newStoppedExceptionEvent(t.id, string(e.Op)))
+		return breakAction, state, nil
+	}
+
 	if e.Location != nil && e.Location.File != "" {
 		for _, bp := range s.breakpoints.allForFilePath(e.Location.File) {
 			if bp.Line == e.Location.Row {

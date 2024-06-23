@@ -371,6 +371,10 @@ func newStoppedEntryEvent(threadId int) *dap.StoppedEvent {
 	return newStoppedEvent("entry", threadId, nil, "", "")
 }
 
+func newStoppedExceptionEvent(threadId int, text string) *dap.StoppedEvent {
+	return newStoppedEvent("exception", threadId, nil, "", text)
+}
+
 func newStoppedResultEvent(threadId int) *dap.StoppedEvent {
 	return newStoppedEvent("result", threadId, nil, "", "")
 }
