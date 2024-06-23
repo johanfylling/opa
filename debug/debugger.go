@@ -10,11 +10,10 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"os"
 	"slices"
 
-	"github.com/google/go-dap"
+	"github.com/open-policy-agent/opa/ast/location"
 	fileurl "github.com/open-policy-agent/opa/internal/file/url"
 	"github.com/open-policy-agent/opa/logging"
 	"github.com/open-policy-agent/opa/rego"
@@ -23,14 +22,12 @@ import (
 )
 
 type Debugger struct {
-	ctx                context.Context
-	session            *session
-	protocolManager    *protocolManager
-	serverCapabilities dap.Capabilities
-	clientCapabilities dap.InitializeRequestArguments
-	logger             *debugLogger
-	printHook          *printHook
-	varManager         *variableManager
+	ctx          context.Context
+	session      *session
+	logger       logging.Logger
+	printHook    *printHook
+	varManager   *variableManager
+	eventHandler EventHandler
 }
 
 type printHook struct {
@@ -42,23 +39,17 @@ func (h *printHook) Print(_ prnt.Context, str string) error {
 	if h == nil || h.d == nil {
 		return nil
 	}
-	h.d.protocolManager.sendEvent(newOutputEvent("stdout", str))
+	h.d.eventHandler(StdoutEventType, 0, str)
 	return nil
 }
 
-func NewDebugger(options ...func(*Debugger)) *Debugger {
+type DebuggerOption func(*Debugger)
+
+func NewDebugger(ctx context.Context, options ...DebuggerOption) *Debugger {
 	d := &Debugger{
-		serverCapabilities: dap.Capabilities{
-			SupportsBreakpointLocationsRequest:    true,
-			SupportsCancelRequest:                 true,
-			SupportsConfigurationDoneRequest:      true,
-			SupportsSingleThreadExecutionRequests: true,
-			SupportSuspendDebuggee:                true,
-			SupportTerminateDebuggee:              true,
-			SupportsTerminateRequest:              true,
-		},
-		varManager: newVariableManager(),
-		logger:     newDebugLogger(logging.NewNoOpLogger(), logging.Info),
+		ctx:          ctx,
+		varManager:   newVariableManager(),
+		eventHandler: newNopEventHandler(),
 	}
 	d.printHook = &printHook{d: d}
 
@@ -69,82 +60,19 @@ func NewDebugger(options ...func(*Debugger)) *Debugger {
 	return d
 }
 
-func Logger(logger logging.Logger) func(*Debugger) {
+func SetLogger(logger logging.Logger) DebuggerOption {
 	return func(d *Debugger) {
-		d.logger = newDebugLogger(logger, logger.GetLevel())
+		d.logger = logger
 	}
 }
 
-func (d *Debugger) Start(ctx context.Context, conn io.ReadWriteCloser) error {
-	d.ctx = ctx
-	d.protocolManager = newProtocolManager(d.logger.local)
-	d.logger.protocolManager = d.protocolManager
-	return d.protocolManager.Start(ctx, conn, d.handleMessage)
-}
-
-func (d *Debugger) handleMessage(message dap.Message) (bool, dap.ResponseMessage, error) {
-	var resp dap.ResponseMessage
-	var err error
-	switch request := message.(type) {
-	case *dap.AttachRequest:
-		resp, err = d.attach(request)
-	case *dap.BreakpointLocationsRequest:
-		resp, err = d.session.breakpointLocations(request)
-	case *dap.ConfigurationDoneRequest:
-		// FIXME: Is this when we should start eval?
-		resp = newConfigurationDoneResponse()
-	case *dap.ContinueRequest:
-		resp, err = d.session.resume(request)
-	case *dap.DisconnectRequest:
-		return true, newDisconnectResponse(), nil
-	case *dap.EvaluateRequest:
-		resp, err = d.session.evaluate(request)
-	case *dap.InitializeRequest:
-		resp, err = d.initialize(request)
-	case *dap.LaunchRequest:
-		resp, err = d.launch(request)
-	case *dap.NextRequest:
-		resp, err = d.session.next(request)
-	case *dap.ScopesRequest:
-		resp, err = d.session.scopes(request)
-	case *dap.SetBreakpointsRequest:
-		resp, err = d.session.setBreakpoints(request)
-	case *dap.StackTraceRequest:
-		resp, err = d.session.stackTrace(request)
-	case *dap.StepInRequest:
-		resp, err = d.session.stepIn(request)
-	case *dap.StepOutRequest:
-		resp, err = d.session.stepOut(request)
-	case *dap.TerminateRequest:
-		resp, err = d.terminate(request)
-	case *dap.ThreadsRequest:
-		resp, err = d.session.getThreads(request)
-	case *dap.VariablesRequest:
-		resp, err = d.session.variables(request)
-	default:
-		d.logger.Warn("Handler not found for request: %T", message)
-		err = fmt.Errorf("handler not found for request: %T", message)
+func SetEventHandler(handler EventHandler) DebuggerOption {
+	return func(d *Debugger) {
+		d.eventHandler = handler
 	}
-	return false, resp, err
 }
 
-func (d *Debugger) initialize(r *dap.InitializeRequest) (*dap.InitializeResponse, error) {
-	if args, err := json.Marshal(r.Arguments); err == nil {
-		d.logger.Info("Initializing: %s", args)
-	} else {
-		d.logger.Info("Initializing")
-	}
-
-	d.clientCapabilities = r.Arguments
-
-	return newInitializeResponse(d.serverCapabilities), nil
-}
-
-func (d *Debugger) attach(r *dap.AttachRequest) (*dap.AttachResponse, error) {
-	return newAttachResponse(), fmt.Errorf("attach not supported")
-}
-
-type launchProperties struct {
+type LaunchProperties struct {
 	BundlePaths  []string     `json:"bundles"`
 	Command      string       `json:"command"`
 	DataPaths    []string     `json:"data"`
@@ -158,7 +86,7 @@ type launchProperties struct {
 	SkipOps      []topdown.Op `json:"skip_ops"`
 }
 
-func (lp launchProperties) String() string {
+func (lp LaunchProperties) String() string {
 	b, err := json.Marshal(lp)
 	if err != nil {
 		return fmt.Sprintf("{}")
@@ -166,44 +94,7 @@ func (lp launchProperties) String() string {
 	return string(b)
 }
 
-func (d *Debugger) launch(r *dap.LaunchRequest) (*dap.LaunchResponse, error) {
-	var props launchProperties
-	if err := json.Unmarshal(r.Arguments, &props); err != nil {
-		return newLaunchResponse(), fmt.Errorf("invalid launch properties: %v", err)
-	}
-
-	if props.LogLevel != "" {
-		d.logger.setLevelFromString(props.LogLevel)
-	} else {
-		d.logger.setRemoteEnabled(false)
-	}
-
-	if props.SkipOps == nil {
-		props.SkipOps = []topdown.Op{topdown.IndexOp, topdown.RedoOp, topdown.SaveOp, topdown.UnifyOp}
-	}
-
-	d.logger.Info("Launching: %s", props)
-
-	var err error
-	switch props.Command {
-	case "run":
-		err = d.launchRunSession(props)
-	case "test":
-		err = d.launchTestSession(props)
-	case "":
-		err = fmt.Errorf("missing launch command")
-	default:
-		err = fmt.Errorf("unsupported launch command: '%s'", r.Command)
-	}
-
-	if err == nil {
-		d.protocolManager.sendEvent(newInitializedEvent())
-	}
-
-	return newLaunchResponse(), err
-}
-
-func (d *Debugger) launchRunSession(props launchProperties) error {
+func (d *Debugger) LaunchEval(props LaunchProperties) error {
 	if d.session != nil {
 		return fmt.Errorf("debug session already active")
 	}
@@ -292,96 +183,9 @@ func readInput(path string) (interface{}, error) {
 	return input, nil
 }
 
-func (d *Debugger) launchTestSession(props launchProperties) error {
-	if d.session != nil {
-		return fmt.Errorf("debug session already active")
-	}
-
-	return fmt.Errorf("test launch not supported")
-}
-
-type frameInfo struct {
-	frame      *dap.StackFrame
-	threadId   int
-	stackIndex int
-}
-
-type breakpointList []dap.Breakpoint
-
-func (b breakpointList) String() string {
-	if b == nil {
-		return "[]"
-	}
-
-	buf := new(bytes.Buffer)
-	buf.WriteString("[")
-	for i, bp := range b {
-		if i > 0 {
-			buf.WriteString(", ")
-		}
-		_, _ = fmt.Fprintf(buf, "%s:%d", bp.Source.Path, bp.Line)
-	}
-	buf.WriteString("]")
-	return buf.String()
-}
-
-type breakpointCollection struct {
-	breakpoints map[string]breakpointList
-	idCounter   int
-}
-
-func newBreakpointCollection() *breakpointCollection {
-	return &breakpointCollection{
-		breakpoints: map[string]breakpointList{},
-	}
-}
-
-func (bc *breakpointCollection) newId() int {
-	bc.idCounter++
-	return bc.idCounter
-}
-
-func (bc *breakpointCollection) add(bp dap.Breakpoint) {
-	bp.Id = bc.newId()
-	bps := bc.breakpoints[bp.Source.Path]
-	bps = append(bps, bp)
-	bc.breakpoints[bp.Source.Path] = bps
-}
-
-func (bc *breakpointCollection) allForSource(s *dap.Source) breakpointList {
-	return bc.allForFilePath(s.Path)
-}
-
-func (bc *breakpointCollection) allForFilePath(path string) breakpointList {
-	return bc.breakpoints[path]
-}
-
-func (bc *breakpointCollection) clear() {
-	bc.breakpoints = map[string]breakpointList{}
-}
-
-func (bc *breakpointCollection) String() string {
-	if bc == nil {
-		return "[]"
-	}
-
-	buf := new(bytes.Buffer)
-	buf.WriteString("[")
-	for path, bps := range bc.breakpoints {
-		for i, bp := range bps {
-			if i > 0 {
-				buf.WriteString(", ")
-			}
-			_, _ = fmt.Fprintf(buf, "%s:%d\n", path, bp.Line)
-		}
-	}
-	buf.WriteString("]")
-	return buf.String()
-}
-
 type session struct {
 	d              *Debugger
-	properties     launchProperties
+	properties     LaunchProperties
 	threads        []*thread
 	frames         []*frameInfo
 	framesByThread map[int][]*frameInfo
@@ -390,7 +194,7 @@ type session struct {
 	cancel         context.CancelFunc
 }
 
-func newSession(debugger *Debugger, props launchProperties, threads []*thread) *session {
+func newSession(debugger *Debugger, props LaunchProperties, threads []*thread) *session {
 	ctx, cancel := context.WithCancel(debugger.ctx)
 	return &session{
 		d:              debugger,
@@ -408,23 +212,27 @@ func (s *session) start(ctx context.Context) {
 	for _, t := range s.threads {
 		t := t
 		go func() {
-			s.d.protocolManager.sendEvent(newThreadEvent(t.id, "started"))
+			s.d.eventHandler(ThreadEventType, t.id, "started")
 			if err := t.run(ctx); err != nil {
 				s.d.logger.Error("Thread %d failed: %v", t.id, err)
 			}
-			s.d.protocolManager.sendEvent(newThreadEvent(t.id, "exited"))
+			s.d.eventHandler(ThreadEventType, t.id, "exited")
 
 			for _, t := range s.threads {
 				if !t.done() {
 					return
 				}
 			}
-			s.d.protocolManager.sendEvent(newTerminatedEvent())
+			s.d.eventHandler(TerminatedEventType, 0, "")
 		}()
 	}
 }
 
 func (s *session) thread(id int) (*thread, error) {
+	if s == nil {
+		return nil, fmt.Errorf("no active debug session")
+	}
+
 	index := id - 1
 	if index < 0 || index >= len(s.threads) {
 		return nil, fmt.Errorf("invalid thread id: %d", id)
@@ -432,126 +240,122 @@ func (s *session) thread(id int) (*thread, error) {
 	return s.threads[index], nil
 }
 
-func (s *session) resume(r *dap.ContinueRequest) (*dap.ContinueResponse, error) {
-	if s == nil {
-		return nil, fmt.Errorf("no active debug session")
+func (d *Debugger) Resume(threadId int) error {
+	if d == nil || d.session == nil {
+		return fmt.Errorf("no active debug session")
 	}
 
-	t, err := s.thread(r.Arguments.ThreadId)
+	t, err := d.session.thread(threadId)
 	if err != nil {
-		return nil, err
+		return err
 	}
-	t.resume()
-	return &dap.ContinueResponse{}, nil
+	return t.resume()
 }
 
-func (s *session) next(r *dap.NextRequest) (*dap.NextResponse, error) {
-	if s == nil {
-		return nil, fmt.Errorf("no active debug session")
+func (d *Debugger) Next(threadId int) error {
+	if d == nil || d.session == nil {
+		return fmt.Errorf("no active debug session")
 	}
 
-	t, err := s.thread(r.Arguments.ThreadId)
+	t, err := d.session.thread(threadId)
 	if err != nil {
-		return nil, err
+		return err
 	}
 
 	err = t.stepOver()
 	if err == nil {
-		s.d.protocolManager.sendEvent(newStoppedEntryEvent(t.id))
+		d.eventHandler(StoppedEventType, t.id, "entry")
 	}
 	if t.done() {
-		s.d.protocolManager.sendEvent(newThreadEvent(t.id, "exited"))
+		d.eventHandler(ThreadEventType, t.id, "exited")
 		allStopped := true
-		for _, t := range s.threads {
+		for _, t := range d.session.threads {
 			if !t.done() {
 				allStopped = false
 				break
 			}
 		}
 		if allStopped {
-			s.d.protocolManager.sendEvent(newTerminatedEvent())
+			d.eventHandler(TerminatedEventType, 0, "")
 		}
 	}
 
-	return &dap.NextResponse{}, err
+	return err
 }
 
-func (s *session) stepIn(r *dap.StepInRequest) (*dap.StepInResponse, error) {
-	if s == nil {
-		return nil, fmt.Errorf("no active debug session")
+func (d *Debugger) StepIn(threadId int) error {
+	if d == nil || d.session == nil {
+		return fmt.Errorf("no active debug session")
 	}
 
-	t, err := s.thread(r.Arguments.ThreadId)
+	t, err := d.session.thread(threadId)
 	if err != nil {
-		return nil, err
+		return err
 	}
 
 	err = t.stepIn()
 	if err == nil {
-		s.d.protocolManager.sendEvent(newStoppedEntryEvent(t.id))
+		d.eventHandler(StoppedEventType, t.id, "entry")
 	}
 	if t.done() {
-		s.d.protocolManager.sendEvent(newThreadEvent(t.id, "exited"))
+		d.eventHandler(ThreadEventType, t.id, "exited")
 		allStopped := true
-		for _, t := range s.threads {
+		for _, t := range d.session.threads {
 			if !t.done() {
 				allStopped = false
 				break
 			}
 		}
 		if allStopped {
-			s.d.protocolManager.sendEvent(newTerminatedEvent())
+			d.eventHandler(TerminatedEventType, 0, "")
 		}
 	}
 
-	return &dap.StepInResponse{}, err
+	return err
 }
 
-func (s *session) stepOut(r *dap.StepOutRequest) (*dap.StepOutResponse, error) {
-	if s == nil {
-		return nil, fmt.Errorf("no active debug session")
+func (d *Debugger) StepOut(threadId int) error {
+	if d == nil || d.session == nil {
+		return fmt.Errorf("no active debug session")
 	}
 
-	t, err := s.thread(r.Arguments.ThreadId)
+	t, err := d.session.thread(threadId)
 	if err != nil {
-		return nil, err
+		return err
 	}
 
 	err = t.stepOut()
 	if err == nil {
-		s.d.protocolManager.sendEvent(newStoppedEntryEvent(t.id))
+		d.eventHandler(StoppedEventType, t.id, "entry")
 	}
 	if t.done() {
-		s.d.protocolManager.sendEvent(newThreadEvent(t.id, "exited"))
+		d.eventHandler(ThreadEventType, t.id, "exited")
 		allStopped := true
-		for _, t := range s.threads {
+		for _, t := range d.session.threads {
 			if !t.done() {
 				allStopped = false
 				break
 			}
 		}
 		if allStopped {
-			s.d.protocolManager.sendEvent(newTerminatedEvent())
+			d.eventHandler(TerminatedEventType, 0, "")
 		}
 	}
 
-	return &dap.StepOutResponse{}, err
+	return err
 }
 
-func (s *session) getThreads(_ *dap.ThreadsRequest) (*dap.ThreadsResponse, error) {
-	if s == nil {
+func (d *Debugger) Threads() ([]Thread, error) {
+	if d == nil || d.session == nil {
 		return nil, fmt.Errorf("no active debug session")
 	}
 
-	threads := make([]dap.Thread, 0, len(s.threads))
-	for _, t := range s.threads {
-		threads = append(threads, dap.Thread{
-			Id:   t.id,
-			Name: t.name,
-		})
+	threads := make([]Thread, 0, len(d.session.threads))
+	for _, t := range d.session.threads {
+		threads = append(threads, t)
 	}
 
-	return newThreadsResponse(threads), nil
+	return threads, nil
 }
 
 type sessionThreadState struct {
@@ -598,7 +402,7 @@ func (s *session) handleEvent(t *thread, e *topdown.Event, ts threadState) (even
 		state.ended = true
 		if s.properties.StopOnResult {
 			s.d.logger.Info("Thread %d stopped at end of trace", t.id)
-			s.d.protocolManager.sendEvent(newStoppedResultEvent(t.id))
+			s.d.eventHandler(StoppedEventType, t.id, "result")
 			return breakAction, state, nil
 		}
 
@@ -616,21 +420,21 @@ func (s *session) handleEvent(t *thread, e *topdown.Event, ts threadState) (even
 	if s.properties.StopOnEntry && !state.entered && e.Location.File != "" {
 		state.entered = true
 		s.d.logger.Info("Thread %d stopped at entry", t.id)
-		s.d.protocolManager.sendEvent(newStoppedEntryEvent(t.id))
+		s.d.eventHandler(StoppedEventType, t.id, "entry")
 		return breakAction, state, nil
 	}
 
 	if s.properties.StopOnFail && e.Op == topdown.FailOp {
 		s.d.logger.Info("Thread %d stopped on failure", t.id)
-		s.d.protocolManager.sendEvent(newStoppedExceptionEvent(t.id, string(e.Op)))
+		s.d.eventHandler(ExceptionEventType, t.id, string(e.Op))
 		return breakAction, state, nil
 	}
 
 	if e.Location != nil && e.Location.File != "" {
 		for _, bp := range s.breakpoints.allForFilePath(e.Location.File) {
-			if bp.Line == e.Location.Row {
+			if bp.location.Row == e.Location.Row {
 				s.d.logger.Info("Thread %d stopped at breakpoint: %s:%d", t.id, e.Location.File, e.Location.Row)
-				s.d.protocolManager.sendEvent(newStoppedBreakpointEvent(t.id, &bp))
+				s.d.eventHandler(StoppedEventType, t.id, "breakpoint")
 				return breakAction, state, nil
 			}
 		}
@@ -651,23 +455,23 @@ func (s *session) skipOp(op topdown.Op) bool {
 func (s *session) result(t *thread, rs rego.ResultSet) {
 	if rsJson, err := json.MarshalIndent(rs, "", "  "); err == nil {
 		s.d.logger.Debug("Result: %s\n", rsJson)
-		s.d.protocolManager.sendEvent(newOutputEvent("stdout", string(rsJson)))
+		s.d.eventHandler(StdoutEventType, t.id, string(rsJson))
 	} else {
 		s.d.logger.Debug("Result: %v\n", rs)
 	}
 }
 
-func (s *session) stackTrace(r *dap.StackTraceRequest) (*dap.StackTraceResponse, error) {
-	if s == nil {
+func (d *Debugger) StackTrace(threadId int) ([]StackFrame, error) {
+	if d == nil || d.session == nil {
 		return nil, fmt.Errorf("no active debug session")
 	}
 
-	t, err := s.thread(r.Arguments.ThreadId)
+	t, err := d.session.thread(threadId)
 	if err != nil {
 		return nil, err
 	}
 
-	threadFrames := s.framesByThread[t.id]
+	threadFrames := d.session.framesByThread[t.id]
 	if threadFrames == nil {
 		threadFrames = []*frameInfo{}
 	}
@@ -679,18 +483,18 @@ func (s *session) stackTrace(r *dap.StackTraceRequest) (*dap.StackTraceResponse,
 	newEvents := t.stackEvents(stackIndex + 1)
 	for _, e := range newEvents {
 		stackIndex++
-		info := s.newStackFrame(e, t, stackIndex)
+		info := d.session.newStackFrame(e, t, stackIndex)
 		threadFrames = append(threadFrames, info)
 	}
-	s.framesByThread[t.id] = threadFrames
+	d.session.framesByThread[t.id] = threadFrames
 
-	frames := make([]dap.StackFrame, 0, len(threadFrames))
+	frames := make([]StackFrame, 0, len(threadFrames))
 	for _, info := range threadFrames {
 		frames = append(frames, *info.frame)
 	}
 	slices.Reverse(frames)
 
-	return newStackTraceResponse(frames), nil
+	return frames, nil
 }
 
 func (s *session) newStackFrame(e *topdown.Event, t *thread, stackIndex int) *frameInfo {
@@ -705,22 +509,10 @@ func (s *session) newStackFrame(e *topdown.Event, t *thread, stackIndex int) *fr
 		expl = fmt.Sprintf("%s, %s", e.Op, e.Location)
 	}
 
-	var source *dap.Source
-	line := 1
-	if e.Location != nil {
-		line = e.Location.Row
-		if e.Location.File != "" {
-			source = &dap.Source{
-				Path: e.Location.File,
-			}
-		}
-	}
-
-	frame := &dap.StackFrame{
-		Id:     id,
-		Name:   fmt.Sprintf("#%d: %d %s", id, e.QueryID, expl),
-		Line:   line,
-		Source: source,
+	frame := &StackFrame{
+		Id:       id,
+		Name:     fmt.Sprintf("#%d: %d %s", id, e.QueryID, expl),
+		Location: e.Location,
 	}
 
 	info := &frameInfo{
@@ -740,92 +532,68 @@ func (s *session) frame(id int) (*frameInfo, error) {
 	return s.frames[index], nil
 }
 
-func (s *session) evaluate(_ *dap.EvaluateRequest) (*dap.EvaluateResponse, error) {
-	return newEvaluateResponse(""), fmt.Errorf("evaluate not supported")
-}
-
-func (s *session) scopes(request *dap.ScopesRequest) (*dap.ScopesResponse, error) {
-	if s == nil {
+func (d *Debugger) Scopes(frameId int) ([]Scope, error) {
+	if d == nil || d.session == nil {
 		return nil, fmt.Errorf("no active debug session")
 	}
 
-	f, err := s.frame(request.Arguments.FrameId)
+	f, err := d.session.frame(frameId)
 	if err != nil {
 		return nil, err
 	}
 
-	t, err := s.thread(f.threadId)
+	t, err := d.session.thread(f.threadId)
 	if err != nil {
 		return nil, err
 	}
 
-	return newScopesResponse(t.scopes(f.stackIndex)), nil
+	return t.scopes(f.stackIndex), nil
 }
 
-func (s *session) variables(request *dap.VariablesRequest) (*dap.VariablesResponse, error) {
-	if s == nil {
+func (d *Debugger) Variables(varRef int) ([]Variable, error) {
+	if d == nil || d.session == nil {
 		return nil, fmt.Errorf("no active debug session")
 	}
 
-	varRef := request.Arguments.VariablesReference
-	s.d.logger.Debug("Variables requested: %d", varRef)
+	d.logger.Debug("Variables requested: %d", varRef)
 
-	vars, err := s.d.varManager.vars(request.Arguments.VariablesReference)
+	vars, err := d.varManager.vars(varRef)
 	if err != nil {
 		return nil, err
 	}
 
-	return newVariablesResponse(vars), nil
+	return vars, nil
 }
 
-func (s *session) breakpointLocations(request *dap.BreakpointLocationsRequest) (*dap.BreakpointLocationsResponse, error) {
-	if s == nil {
+func (d *Debugger) SetBreakpoints(locations []location.Location) ([]Breakpoint, error) {
+	if d == nil || d.session == nil {
 		return nil, fmt.Errorf("no active debug session")
 	}
 
-	line := request.Arguments.Line
-	s.d.logger.Debug("Breakpoint locations requested for: %s:%d", request.Arguments.Source.Name, line)
+	d.logger.Debug("Clearing existing breakpoints")
+	d.session.breakpoints.clear()
 
-	// TODO: Actually assert where breakpoints can be placed.
-	return newBreakpointLocationsResponse([]dap.BreakpointLocation{
-		{
-			Line:   line,
-			Column: 1,
-		},
-	}), nil
-}
-
-func (s *session) setBreakpoints(request *dap.SetBreakpointsRequest) (*dap.SetBreakpointsResponse, error) {
-	if s == nil {
-		return nil, fmt.Errorf("no active debug session")
+	bps := make([]Breakpoint, 0, len(locations))
+	for _, loc := range locations {
+		bps = append(bps, d.session.breakpoints.add(loc))
 	}
 
-	source := request.Arguments.Source
-	s.d.logger.Debug("Clearing existing breakpoints for source %s: %v",
-		source.Name, s.breakpoints.allForSource(&source))
-	s.breakpoints.clear()
-
-	for _, bp := range request.Arguments.Breakpoints {
-		s.breakpoints.add(dap.Breakpoint{
-			Source:   &request.Arguments.Source,
-			Verified: true,
-			Line:     bp.Line,
-			Column:   bp.Column,
-		})
-	}
-
-	return newSetBreakpointsResponse(s.breakpoints.allForSource(&source)), nil
+	return bps, nil
 }
 
-func (d *Debugger) terminate(r *dap.TerminateRequest) (*dap.TerminateResponse, error) {
-	resp, err := d.session.terminate(r)
+func (d *Debugger) Terminate() error {
+	if d == nil || d.session == nil {
+		return fmt.Errorf("no active debug session")
+	}
+
+	err := d.session.terminate()
 	d.session = nil
-	return resp, err
+	return err
 }
 
-func (s *session) terminate(_ *dap.TerminateRequest) (*dap.TerminateResponse, error) {
+func (s *session) terminate() error {
 	if s == nil {
-		return nil, fmt.Errorf("no active debug session")
+		return fmt.Errorf("no active debug session")
 	}
 
 	s.cancel()
@@ -836,13 +604,13 @@ func (s *session) terminate(_ *dap.TerminateRequest) (*dap.TerminateResponse, er
 			hasErrors = true
 			s.d.logger.Error("Failed to stop thread %d: %v", t.id, err)
 		} else {
-			s.d.protocolManager.sendEvent(newThreadEvent(t.id, "exited"))
+			s.d.eventHandler(ThreadEventType, t.id, "exited")
 		}
 	}
 
 	if !hasErrors {
-		s.d.protocolManager.sendEvent(newTerminatedEvent())
+		s.d.eventHandler(TerminatedEventType, 0, "")
 	}
 
-	return newTerminateResponse(), nil
+	return nil
 }

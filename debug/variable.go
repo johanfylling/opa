@@ -9,7 +9,6 @@ import (
 	"slices"
 	"strings"
 
-	"github.com/google/go-dap"
 	"github.com/open-policy-agent/opa/ast"
 )
 
@@ -33,17 +32,24 @@ func (vs *variableManager) addVars(getter variableGetter) int {
 	return len(vs.getters)
 }
 
-func (vs *variableManager) vars(varRef int) ([]dap.Variable, error) {
+type Variable struct {
+	Name               string
+	Type               string
+	Value              string
+	VariablesReference int
+}
+
+func (vs *variableManager) vars(varRef int) ([]Variable, error) {
 	i := varRef - 1
 	if i < 0 || i >= len(vs.getters) {
 		return nil, fmt.Errorf("invalid variable reference: %d", varRef)
 	}
 
 	namedVar := vs.getters[i]()
-	vars := make([]dap.Variable, len(namedVar))
+	vars := make([]Variable, len(namedVar))
 
 	for i, nv := range namedVar {
-		vars[i] = dap.Variable{
+		vars[i] = Variable{
 			Name:               nv.Name,
 			Type:               valueTypeName(nv.Value),
 			Value:              nv.Value.String(),
@@ -51,7 +57,7 @@ func (vs *variableManager) vars(varRef int) ([]dap.Variable, error) {
 		}
 	}
 
-	slices.SortFunc(vars, func(a, b dap.Variable) int {
+	slices.SortFunc(vars, func(a, b Variable) int {
 		return strings.Compare(a.Name, b.Name)
 	})
 

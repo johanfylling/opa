@@ -8,8 +8,8 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/google/go-dap"
 	"github.com/open-policy-agent/opa/ast"
+	"github.com/open-policy-agent/opa/ast/location"
 	"github.com/open-policy-agent/opa/logging"
 	"github.com/open-policy-agent/opa/rego"
 	"github.com/open-policy-agent/opa/topdown"
@@ -28,6 +28,11 @@ const (
 
 type eventHandler func(t *thread, e *topdown.Event, s threadState) (eventAction, threadState, error)
 
+type Thread interface {
+	Id() int
+	Name() string
+}
+
 type thread struct {
 	id              int
 	name            string
@@ -38,6 +43,14 @@ type thread struct {
 	state           threadState
 	varManager      *variableManager
 	logger          logging.Logger
+}
+
+func (t *thread) Id() int {
+	return t.id
+}
+
+func (t *thread) Name() string {
+	return t.name
 }
 
 func newThread(id int, name string, stack stack, varManager *variableManager, logger logging.Logger) *thread {
@@ -74,8 +87,9 @@ func (t *thread) run(ctx context.Context) error {
 	}
 }
 
-func (t *thread) resume() {
+func (t *thread) resume() error {
 	t.breakpointLatch.unblock()
+	return nil
 }
 
 func (t *thread) current() (*topdown.Event, error) {
@@ -219,31 +233,33 @@ func (t *thread) stackEvents(from int) []*topdown.Event {
 	return events
 }
 
-func (t *thread) scopes(stackIndex int) []dap.Scope {
+type Scope struct {
+	Name               string
+	NamedVariables     int
+	VariablesReference int
+	Location           *location.Location
+}
+
+func (t *thread) scopes(stackIndex int) []Scope {
 	e := t.stack.Event(stackIndex)
 	if e == nil {
 		return nil
 	}
 
-	scopes := make([]dap.Scope, 0, 3)
+	scopes := make([]Scope, 0, 3)
 
 	// TODO: Clients are expected to keep track of fetched scopes and variable references (vs-code does),
 	// but it wouldn't hurt to not register the same var-getter callback more than once.
-	localScope := dap.Scope{
+	localScope := Scope{
 		Name:               "Locals",
 		NamedVariables:     e.Locals.Len(),
 		VariablesReference: t.localVars(e),
-		Source: &dap.Source{
-			Name: e.Location.File,
-			Path: e.Location.File,
-		},
-		Line:    e.Location.Row,
-		EndLine: e.Location.Row,
+		Location:           e.Location,
 	}
 	scopes = append(scopes, localScope)
 
 	if e.Input() != nil {
-		inputScope := dap.Scope{
+		inputScope := Scope{
 			Name:               "Input",
 			NamedVariables:     1,
 			VariablesReference: t.inputVars(e),
@@ -252,7 +268,7 @@ func (t *thread) scopes(stackIndex int) []dap.Scope {
 	}
 
 	if rs := t.stack.Result(); rs != nil {
-		resultScope := dap.Scope{
+		resultScope := Scope{
 			Name:               "Result Set",
 			NamedVariables:     1,
 			VariablesReference: t.resultVars(rs),
