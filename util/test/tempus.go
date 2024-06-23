@@ -23,6 +23,13 @@ func Eventually(t *testing.T, timeout time.Duration, f func() bool) bool {
 	return false
 }
 
+func EventuallyOrFatal(t *testing.T, timeout time.Duration, f func() bool) {
+	t.Helper()
+	if !Eventually(t, timeout, f) {
+		t.Fatal("Timeout")
+	}
+}
+
 type BlockingWriter struct {
 	m   sync.Mutex
 	buf bytes.Buffer

@@ -141,7 +141,7 @@ func (d *Debugger) LaunchEval(props LaunchProperties) error {
 
 	// Threads are 1-indexed.
 	t := newThread(1, "main", tracer, d.varManager, d.logger)
-	d.session = newSession(d, props, []*thread{t})
+	newSession(d, props, []*thread{t})
 
 	go func() {
 		defer func() { _ = tracer.Close() }()
@@ -159,7 +159,6 @@ func (d *Debugger) LaunchEval(props LaunchProperties) error {
 		d.session.result(t, rs)
 	}()
 
-	t.eventHandler = d.session.handleEvent
 	d.session.start(d.ctx)
 	return nil
 }
@@ -196,7 +195,7 @@ type session struct {
 
 func newSession(debugger *Debugger, props LaunchProperties, threads []*thread) *session {
 	ctx, cancel := context.WithCancel(debugger.ctx)
-	return &session{
+	s := &session{
 		d:              debugger,
 		properties:     props,
 		threads:        threads,
@@ -206,6 +205,13 @@ func newSession(debugger *Debugger, props LaunchProperties, threads []*thread) *
 		ctx:            ctx,
 		cancel:         cancel,
 	}
+	debugger.session = s
+
+	for _, t := range threads {
+		t.eventHandler = s.handleEvent
+	}
+
+	return s
 }
 
 func (s *session) start(ctx context.Context) {
@@ -218,12 +224,17 @@ func (s *session) start(ctx context.Context) {
 			}
 			s.d.eventHandler(ThreadEventType, t.id, "exited")
 
+			allStopped := true
 			for _, t := range s.threads {
 				if !t.done() {
-					return
+					allStopped = false
+					break
 				}
 			}
-			s.d.eventHandler(TerminatedEventType, 0, "")
+
+			if allStopped {
+				s.d.eventHandler(TerminatedEventType, 0, "")
+			}
 		}()
 	}
 }
