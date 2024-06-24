@@ -6,6 +6,7 @@ package logs
 
 import (
 	"container/list"
+	"fmt"
 )
 
 // logBuffer implements a circular FIFO buffer for the plugin that caps memory
@@ -29,11 +30,24 @@ func newLogBuffer(limit int64) *logBuffer {
 	}
 }
 
-func (lb *logBuffer) Push(bs []byte) (dropped int) {
+type TooLargeError struct {
+	Limit int64
+}
+
+func (e *TooLargeError) Error() string {
+	return fmt.Sprintf("log buffer size limit exceeded (%d)", e.Limit)
+}
+
+func (lb *logBuffer) Push(bs []byte, allowDrop bool) (int, error) {
 	size := int64(len(bs))
+	dropped := 0
 
 	if lb.limit > 0 {
 		for elem := lb.l.Front(); elem != nil && (lb.usage+size > lb.limit); elem = elem.Next() {
+			if !allowDrop {
+				return 0, &TooLargeError{Limit: lb.limit}
+			}
+
 			drop := elem.Value.(logBufferElem).bs
 			lb.l.Remove(elem)
 			lb.usage -= int64(len(drop))
@@ -45,7 +59,7 @@ func (lb *logBuffer) Push(bs []byte) (dropped int) {
 
 	lb.l.PushBack(elem)
 	lb.usage += size
-	return dropped
+	return dropped, nil
 }
 
 func (lb *logBuffer) Pop() []byte {

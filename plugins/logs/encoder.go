@@ -61,16 +61,26 @@ func (enc *chunkEncoder) Write(event EventV1) (result [][]byte, err error) {
 		return nil, err
 	}
 
-	bs := buf.Bytes()
+	return enc.WriteBytes(buf.Bytes())
+}
 
+type TooLargeChunkError struct {
+	Limit int64
+	Size  int64
+}
+
+func (e *TooLargeChunkError) Error() string {
+	return fmt.Sprintf("upload chunk size (%d) exceeds upload_size_limit_bytes (%d)", e.Size, e.Limit)
+}
+
+func (enc *chunkEncoder) WriteBytes(bs []byte) (result [][]byte, err error) {
 	if len(bs) == 0 {
 		return nil, nil
 	} else if int64(len(bs)+2) > enc.limit {
 		if enc.metrics != nil {
 			enc.metrics.Counter(encLogExUploadSizeLimitCounterName).Incr()
 		}
-		return nil, fmt.Errorf("upload chunk size (%d) exceeds upload_size_limit_bytes (%d)",
-			int64(len(bs)+2), enc.limit)
+		return nil, &TooLargeChunkError{Limit: enc.limit, Size: int64(len(bs) + 2)}
 	}
 
 	if int64(len(bs)+enc.bytesWritten+1) > enc.softLimit {

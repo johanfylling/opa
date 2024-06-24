@@ -6,9 +6,13 @@
 package logs
 
 import (
+	"bytes"
+	"compress/gzip"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"math"
 	"math/rand"
 	"net/url"
@@ -418,7 +422,6 @@ type Plugin struct {
 	manager      *plugins.Manager
 	config       Config
 	buffer       *logBuffer
-	enc          *chunkEncoder
 	mtx          sync.Mutex
 	stop         chan chan struct{}
 	reconfig     chan reconfigure
@@ -538,7 +541,6 @@ func New(parsedConfig *Config, manager *plugins.Manager) *Plugin {
 		config:       *parsedConfig,
 		stop:         make(chan chan struct{}),
 		buffer:       newLogBuffer(*parsedConfig.Reporting.BufferSizeLimitBytes),
-		enc:          newChunkEncoder(*parsedConfig.Reporting.UploadSizeLimitBytes),
 		reconfig:     make(chan reconfigure),
 		logger:       manager.Logger().WithFields(map[string]interface{}{"plugin": Name}),
 		status:       &lstat.Status{},
@@ -561,7 +563,6 @@ func New(parsedConfig *Config, manager *plugins.Manager) *Plugin {
 // WithMetrics sets the global metrics provider to be used by the plugin.
 func (p *Plugin) WithMetrics(m metrics.Metrics) *Plugin {
 	p.metrics = m
-	p.enc.WithMetrics(m)
 	return p
 }
 
@@ -714,9 +715,7 @@ func (p *Plugin) Log(ctx context.Context, decision *server.Info) error {
 	}
 
 	if p.config.Service != "" {
-		p.mtx.Lock()
 		p.encodeAndBufferEvent(event)
-		p.mtx.Unlock()
 	}
 
 	if p.config.Plugin != nil {
@@ -850,60 +849,175 @@ func (p *Plugin) doOneShot(ctx context.Context) error {
 }
 
 func (p *Plugin) oneShot(ctx context.Context) (ok bool, err error) {
-	// Make a local copy of the plugins's encoder and buffer and create
-	// a new encoder and buffer. This is needed as locking the buffer for
-	// the upload duration will block policy evaluation and result in
-	// increased latency for OPA clients
 	p.mtx.Lock()
-	oldChunkEnc := p.enc
 	oldBuffer := p.buffer
 	p.buffer = newLogBuffer(*p.config.Reporting.BufferSizeLimitBytes)
-	p.enc = newChunkEncoder(*p.config.Reporting.UploadSizeLimitBytes).WithMetrics(p.metrics)
 	p.mtx.Unlock()
-
-	// Along with uploading the compressed events in the buffer
-	// to the remote server, flush any pending compressed data to the
-	// underlying writer and add to the buffer.
-	chunk, err := oldChunkEnc.Flush()
-	if err != nil {
-		return false, err
-	}
-
-	for _, ch := range chunk {
-		p.bufferChunk(oldBuffer, ch)
-	}
 
 	if oldBuffer.Len() == 0 {
 		return false, nil
 	}
 
+	// FIXME: Gosh, this mess really needs to be sorted out
+	chunks := make([][]byte, 0)
+	encoder := newChunkEncoder(*p.config.Reporting.UploadSizeLimitBytes).WithMetrics(p.metrics)
 	for bs := oldBuffer.Pop(); bs != nil; bs = oldBuffer.Pop() {
-		if err == nil {
-			err = uploadChunk(ctx, p.manager.Client(p.config.Service), *p.config.Resource, bs)
-		}
-		if err != nil {
-			if p.limiter != nil {
-				events, decErr := newChunkDecoder(bs).decode()
-				if decErr != nil {
-					continue
-				}
-
-				p.mtx.Lock()
-				for _, event := range events {
-					p.encodeAndBufferEvent(event)
-				}
-				p.mtx.Unlock()
-
-			} else {
-				// requeue the chunk
-				p.mtx.Lock()
-				p.bufferChunk(p.buffer, bs)
-				p.mtx.Unlock()
+		if p.config.Reporting.BufferSizeLimitBytes != nil {
+			gr, gzErr := gzip.NewReader(bytes.NewReader(bs))
+			if gzErr != nil {
+				return false, gzErr
 			}
+			eventBs, gzErr := io.ReadAll(gr)
+			if gzErr != nil {
+				return false, gzErr
+			}
+			bs = eventBs
+		}
+
+		result, err := encoder.WriteBytes(bs)
+		if err != nil {
+			var tooLargeChunkError *TooLargeChunkError
+			if errors.As(err, &tooLargeChunkError) {
+				var flushErr error
+				result, flushErr = encoder.Flush()
+				if flushErr != nil {
+					return false, flushErr
+				}
+				// We're not dropping the ND builtins cache preemptively, as the event might fit in the next chunk
+
+				if len(result) > 0 {
+					// The encoder now has more space; re-offer the event
+					retryResult, err := encoder.WriteBytes(bs)
+					if err != nil {
+						var tooLargeChunkError *TooLargeChunkError
+						if errors.As(err, &tooLargeChunkError) {
+							// The event still doesn't fit; drop the ND builtins cache and try again
+							var event EventV1
+							if err := json.NewDecoder(bytes.NewReader(bs)).Decode(&event); err != nil {
+								// FIXME: drop event instead?
+								return false, err
+							}
+							if event.NDBuiltinCache != nil {
+								event.NDBuiltinCache = nil
+								eventBs, err := json.Marshal(event)
+								if err != nil {
+									// FIXME: drop event instead?
+									return false, err
+								}
+								retryResult2, retryErr2 := encoder.WriteBytes(eventBs)
+								if retryErr2 != nil {
+									var tooLargeChunkError *TooLargeChunkError
+									if errors.As(retryErr2, &tooLargeChunkError) {
+										// The event still doesn't fit; drop the event
+										if p.metrics != nil {
+											// FIXME: is this the right counter?
+											p.metrics.Counter(logBufferSizeLimitExDropCounterName).Incr()
+										}
+										p.logger.Error("Dropped 1 events from upload chunk. Increase upload size limit or change usage of non-deterministic builtins.")
+									} else {
+										// Non-size related error; can't recover
+										return false, retryErr2
+									}
+								}
+								if len(retryResult2) > 0 {
+									result = append(result, retryResult2...)
+								}
+							} else {
+								// The event doesn't have an ND builtins cache; can't recover
+								// FIXME: drop event instead?
+								return false, err
+							}
+						} else {
+							// Non-size related error; can't recover
+							return false, err
+						}
+					}
+					if len(retryResult) > 0 {
+						result = append(result, retryResult...)
+					}
+				} else {
+					// Flush made no change to encoder
+
+					// The event still doesn't fit; drop the ND builtins cache and try again
+					var event EventV1
+					if err := json.NewDecoder(bytes.NewReader(bs)).Decode(&event); err != nil {
+						// FIXME: drop event instead?
+						return false, err
+					}
+					if event.NDBuiltinCache != nil {
+						event.NDBuiltinCache = nil
+						eventBs, err := json.Marshal(event)
+						if err != nil {
+							// FIXME: drop event instead?
+							return false, err
+						}
+						retryResult2, retryErr2 := encoder.WriteBytes(eventBs)
+						if retryErr2 != nil {
+							var tooLargeChunkError *TooLargeChunkError
+							if errors.As(retryErr2, &tooLargeChunkError) {
+								// The event still doesn't fit; drop the event
+								if p.metrics != nil {
+									// FIXME: is this the right counter?
+									p.metrics.Counter(logBufferSizeLimitExDropCounterName).Incr()
+								}
+								p.logger.Error("Dropped 1 events from upload chunk. Increase upload size limit or change usage of non-deterministic builtins.")
+							} else {
+								// Non-size related error; can't recover
+								return false, retryErr2
+							}
+						}
+
+						p.logger.Error("ND builtins cache dropped from this event to fit under maximum upload size limits. Increase upload size limit or change usage of non-deterministic builtins.")
+						p.metrics.Counter(logNDBDropCounterName).Incr()
+
+						if len(retryResult2) > 0 {
+							result = append(result, retryResult2...)
+						}
+					} else {
+						// The event doesn't have an ND builtins cache; can't recover
+						// FIXME: drop event instead?
+						return false, err
+					}
+				}
+			} else {
+				// Non-size related error; can't recover
+				return false, err
+			}
+		}
+
+		if len(result) > 0 {
+			chunks = append(chunks, result...)
 		}
 	}
 
-	return err == nil, err
+	// Flush the last chunk
+	if result, err := encoder.Flush(); err != nil {
+		return false, err
+	} else if len(result) > 0 {
+		chunks = append(chunks, result...)
+	}
+
+	uploaded := false
+	for _, chunk := range chunks {
+		if err == nil {
+			err = uploadChunk(ctx, p.manager.Client(p.config.Service), *p.config.Resource, chunk)
+		}
+		if err != nil {
+			events, decErr := newChunkDecoder(chunk).decode()
+			if decErr != nil {
+				// Isn't the chunk/events dropped here? Why isn't that reported?
+				continue
+			}
+
+			for _, event := range events {
+				p.encodeAndBufferEvent(event)
+			}
+		} else {
+			uploaded = true
+		}
+	}
+
+	return uploaded, err
 }
 
 func (p *Plugin) reconfigure(config interface{}) {
@@ -919,9 +1033,6 @@ func (p *Plugin) reconfigure(config interface{}) {
 	p.config = *newConfig
 }
 
-// NOTE(philipc): Because ND builtins caching can cause unbounded growth in
-// decision log entry size, we do best-effort event encoding here, and when we
-// run out of space, we drop the ND builtins cache, and try encoding again.
 func (p *Plugin) encodeAndBufferEvent(event EventV1) {
 	if p.limiter != nil {
 		if !p.limiter.Allow() {
@@ -934,8 +1045,19 @@ func (p *Plugin) encodeAndBufferEvent(event EventV1) {
 		}
 	}
 
-	result, err := p.enc.Write(event)
-	if err != nil {
+	var handleEncodingFailure = func(err error) {
+		if p.metrics != nil {
+			var tooLargeError *TooLargeError
+			if errors.As(err, &tooLargeError) {
+				p.metrics.Counter(logBufferSizeLimitExDropCounterName).Incr()
+			} else {
+				p.metrics.Counter(logEncodingFailureCounterName).Incr()
+			}
+		}
+		p.logger.Error("Log encoding failed: %v.", err)
+	}
+
+	if err := p.bufferEvent(p.buffer, event, false); err != nil {
 		// If there's no ND builtins cache in the event, then we don't
 		// need to retry encoding anything.
 		if event.NDBuiltinCache == nil {
@@ -943,44 +1065,65 @@ func (p *Plugin) encodeAndBufferEvent(event EventV1) {
 			// can return an error. Should the default behaviour be to
 			// fail-closed as we do for plugins?
 
-			if p.metrics != nil {
-				p.metrics.Counter(logEncodingFailureCounterName).Incr()
-			}
-			p.logger.Error("Log encoding failed: %v.", err)
+			handleEncodingFailure(err)
 			return
 		}
 
-		// Attempt to encode the event again, dropping the ND builtins cache.
 		newEvent := event
 		newEvent.NDBuiltinCache = nil
 
-		result, err = p.enc.Write(newEvent)
-		if err != nil {
-			if p.metrics != nil {
-				p.metrics.Counter(logEncodingFailureCounterName).Incr()
-			}
-			p.logger.Error("Log encoding failed: %v.", err)
+		if err := p.bufferEvent(p.buffer, newEvent, true); err != nil {
+			handleEncodingFailure(err)
 			return
 		}
 
 		// Re-encoding was successful, but we still need to alert users.
-		p.logger.Error("ND builtins cache dropped from this event to fit under maximum upload size limits. Increase upload size limit or change usage of non-deterministic builtins.")
+		p.logger.Error("ND builtins cache dropped from this event to fit under maximum buffer size limits. Increase buffer size limit or change usage of non-deterministic builtins.")
 		p.metrics.Counter(logNDBDropCounterName).Incr()
-	}
-
-	for _, chunk := range result {
-		p.bufferChunk(p.buffer, chunk)
 	}
 }
 
-func (p *Plugin) bufferChunk(buffer *logBuffer, bs []byte) {
-	dropped := buffer.Push(bs)
+func (p *Plugin) bufferEvent(buffer *logBuffer, event EventV1, allowDrop bool) error {
+	buf := new(bytes.Buffer)
+	if err := json.NewEncoder(buf).Encode(event); err != nil {
+		return fmt.Errorf("failed to encode event: %v", err)
+	}
+
+	var zb *bytes.Buffer
+	if p.config.Reporting.BufferSizeLimitBytes != nil {
+		// By gzipping each entry in the buffer, we sacrifice CPU for memory
+		zb = new(bytes.Buffer)
+		gz := gzip.NewWriter(zb)
+		_, err := gz.Write(buf.Bytes())
+		if err != nil {
+			gz = nil
+		}
+		gz.Close()
+	}
+
+	dropped := 0
+	var err error
+
+	p.mtx.Lock()
+	if zb == nil {
+		dropped, err = buffer.Push(buf.Bytes(), allowDrop)
+	} else {
+		dropped, err = buffer.Push(zb.Bytes(), allowDrop)
+	}
+	p.mtx.Unlock()
+
+	if err != nil {
+		return err
+	}
+
 	if dropped > 0 {
 		if p.metrics != nil {
 			p.metrics.Counter(logBufferSizeLimitExDropCounterName).Incr()
 		}
-		p.logger.Error("Dropped %v chunks from buffer. Reduce reporting interval or increase buffer size.", dropped)
+		p.logger.Error("Dropped %v events from buffer. Reduce reporting interval or increase buffer size.", dropped)
 	}
+
+	return nil
 }
 
 func (p *Plugin) maskEvent(ctx context.Context, txn storage.Transaction, input ast.Value, event *EventV1) error {
