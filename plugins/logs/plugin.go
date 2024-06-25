@@ -1058,17 +1058,7 @@ func (p *Plugin) encodeAndBufferEvent(event EventV1) {
 	}
 
 	if err := p.bufferEvent(p.buffer, event, false); err != nil {
-		// If there's no ND builtins cache in the event, then we don't
-		// need to retry encoding anything.
-		if event.NDBuiltinCache == nil {
-			// TODO(tsandall): revisit this now that we have an API that
-			// can return an error. Should the default behaviour be to
-			// fail-closed as we do for plugins?
-
-			handleEncodingFailure(err)
-			return
-		}
-
+		ndDropped := event.NDBuiltinCache != nil
 		newEvent := event
 		newEvent.NDBuiltinCache = nil
 
@@ -1077,9 +1067,11 @@ func (p *Plugin) encodeAndBufferEvent(event EventV1) {
 			return
 		}
 
-		// Re-encoding was successful, but we still need to alert users.
-		p.logger.Error("ND builtins cache dropped from this event to fit under maximum buffer size limits. Increase buffer size limit or change usage of non-deterministic builtins.")
-		p.metrics.Counter(logNDBDropCounterName).Incr()
+		if ndDropped {
+			// Re-encoding was successful, but we still need to alert users.
+			p.logger.Error("ND builtins cache dropped from this event to fit under maximum buffer size limits. Increase buffer size limit or change usage of non-deterministic builtins.")
+			p.metrics.Counter(logNDBDropCounterName).Incr()
+		}
 	}
 }
 
