@@ -29,6 +29,10 @@ func (b breakpoint) Location() location.Location {
 	return b.location
 }
 
+func (b breakpoint) String() string {
+	return fmt.Sprintf("<%d> %s:%d", b.id, b.location.File, b.location.Row)
+}
+
 type breakpointList []breakpoint
 
 func (b breakpointList) String() string {

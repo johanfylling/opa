@@ -39,7 +39,7 @@ func (h *printHook) Print(_ prnt.Context, str string) error {
 	if h == nil || h.d == nil {
 		return nil
 	}
-	h.d.eventHandler(StdoutEventType, 0, str)
+	h.d.eventHandler(DebugEvent{Type: StdoutEventType, Message: str})
 	return nil
 }
 
@@ -218,11 +218,13 @@ func (s *session) start(ctx context.Context) {
 	for _, t := range s.threads {
 		t := t
 		go func() {
-			s.d.eventHandler(ThreadEventType, t.id, "started")
+			s.d.logger.Debug("Thread %d started", t.id)
+			s.d.sendEvent(DebugEvent{Type: ThreadEventType, Thread: t.id, Message: "started"})
 			if err := t.run(ctx); err != nil {
 				s.d.logger.Error("Thread %d failed: %v", t.id, err)
 			}
-			s.d.eventHandler(ThreadEventType, t.id, "exited")
+			s.d.logger.Debug("Thread %d stopped", t.id)
+			s.d.sendEvent(DebugEvent{Type: ThreadEventType, Thread: t.id, Message: "exited"})
 
 			allStopped := true
 			for _, t := range s.threads {
@@ -233,7 +235,8 @@ func (s *session) start(ctx context.Context) {
 			}
 
 			if allStopped {
-				s.d.eventHandler(TerminatedEventType, 0, "")
+				s.d.logger.Debug("All threads stopped")
+				s.d.sendEvent(DebugEvent{Type: TerminatedEventType})
 			}
 		}()
 	}
@@ -260,6 +263,7 @@ func (d *Debugger) Resume(threadId int) error {
 	if err != nil {
 		return err
 	}
+
 	return t.resume()
 }
 
@@ -275,10 +279,10 @@ func (d *Debugger) Next(threadId int) error {
 
 	err = t.stepOver()
 	if err == nil {
-		d.eventHandler(StoppedEventType, t.id, "entry")
+		d.sendEvent(DebugEvent{Type: StoppedEventType, Thread: t.id, Message: "entry"})
 	}
 	if t.done() {
-		d.eventHandler(ThreadEventType, t.id, "exited")
+		d.sendEvent(DebugEvent{Type: ThreadEventType, Thread: t.id, Message: "exited"})
 		allStopped := true
 		for _, t := range d.session.threads {
 			if !t.done() {
@@ -287,7 +291,7 @@ func (d *Debugger) Next(threadId int) error {
 			}
 		}
 		if allStopped {
-			d.eventHandler(TerminatedEventType, 0, "")
+			d.sendEvent(DebugEvent{Type: TerminatedEventType})
 		}
 	}
 
@@ -306,10 +310,11 @@ func (d *Debugger) StepIn(threadId int) error {
 
 	err = t.stepIn()
 	if err == nil {
-		d.eventHandler(StoppedEventType, t.id, "entry")
+		e, _ := t.current()
+		d.sendEvent(DebugEvent{Type: StoppedEventType, Thread: t.id, Message: "entry", stackEvent: e})
 	}
 	if t.done() {
-		d.eventHandler(ThreadEventType, t.id, "exited")
+		d.sendEvent(DebugEvent{Type: ThreadEventType, Thread: t.id, Message: "exited"})
 		allStopped := true
 		for _, t := range d.session.threads {
 			if !t.done() {
@@ -318,7 +323,7 @@ func (d *Debugger) StepIn(threadId int) error {
 			}
 		}
 		if allStopped {
-			d.eventHandler(TerminatedEventType, 0, "")
+			d.sendEvent(DebugEvent{Type: TerminatedEventType})
 		}
 	}
 
@@ -337,10 +342,10 @@ func (d *Debugger) StepOut(threadId int) error {
 
 	err = t.stepOut()
 	if err == nil {
-		d.eventHandler(StoppedEventType, t.id, "entry")
+		d.sendEvent(DebugEvent{Type: StoppedEventType, Thread: t.id, Message: "entry"})
 	}
 	if t.done() {
-		d.eventHandler(ThreadEventType, t.id, "exited")
+		d.sendEvent(DebugEvent{Type: ThreadEventType, Thread: t.id, Message: "exited"})
 		allStopped := true
 		for _, t := range d.session.threads {
 			if !t.done() {
@@ -349,7 +354,7 @@ func (d *Debugger) StepOut(threadId int) error {
 			}
 		}
 		if allStopped {
-			d.eventHandler(TerminatedEventType, 0, "")
+			d.sendEvent(DebugEvent{Type: TerminatedEventType})
 		}
 	}
 
@@ -380,7 +385,7 @@ func (s *sessionThreadState) String() string {
 	return fmt.Sprintf("{entered: %v, ended: %v, prevQueryId: %d}", s.entered, s.ended, s.prevQueryId)
 }
 
-func (s *session) handleEvent(t *thread, e *topdown.Event, ts threadState) (eventAction, threadState, error) {
+func (s *session) handleEvent(t *thread, stackIndex int, e *topdown.Event, ts threadState) (eventAction, threadState, error) {
 	state, ok := ts.(*sessionThreadState)
 	if state != nil && !ok {
 		s.d.logger.Warn("invalid thread state: %v", s)
@@ -413,7 +418,7 @@ func (s *session) handleEvent(t *thread, e *topdown.Event, ts threadState) (even
 		state.ended = true
 		if s.properties.StopOnResult {
 			s.d.logger.Info("Thread %d stopped at end of trace", t.id)
-			s.d.eventHandler(StoppedEventType, t.id, "result")
+			s.d.sendEvent(DebugEvent{Type: StoppedEventType, Thread: t.id, Message: "result", stackIndex: stackIndex, stackEvent: e})
 			return breakAction, state, nil
 		}
 
@@ -428,16 +433,16 @@ func (s *session) handleEvent(t *thread, e *topdown.Event, ts threadState) (even
 		return skipAction, state, nil
 	}
 
-	if s.properties.StopOnEntry && !state.entered && e.Location.File != "" {
+	if s.properties.StopOnEntry && !state.entered && e.Location != nil && e.Location.File != "" {
 		state.entered = true
 		s.d.logger.Info("Thread %d stopped at entry", t.id)
-		s.d.eventHandler(StoppedEventType, t.id, "entry")
+		s.d.sendEvent(DebugEvent{Type: StoppedEventType, Thread: t.id, Message: "entry", stackIndex: stackIndex, stackEvent: e})
 		return breakAction, state, nil
 	}
 
 	if s.properties.StopOnFail && e.Op == topdown.FailOp {
 		s.d.logger.Info("Thread %d stopped on failure", t.id)
-		s.d.eventHandler(ExceptionEventType, t.id, string(e.Op))
+		s.d.sendEvent(DebugEvent{Type: ExceptionEventType, Thread: t.id, Message: string(e.Op), stackIndex: stackIndex, stackEvent: e})
 		return breakAction, state, nil
 	}
 
@@ -445,7 +450,7 @@ func (s *session) handleEvent(t *thread, e *topdown.Event, ts threadState) (even
 		for _, bp := range s.breakpoints.allForFilePath(e.Location.File) {
 			if bp.location.Row == e.Location.Row {
 				s.d.logger.Info("Thread %d stopped at breakpoint: %s:%d", t.id, e.Location.File, e.Location.Row)
-				s.d.eventHandler(StoppedEventType, t.id, "breakpoint")
+				s.d.sendEvent(DebugEvent{Type: StoppedEventType, Thread: t.id, Message: "breakpoint", stackIndex: stackIndex, stackEvent: e})
 				return breakAction, state, nil
 			}
 		}
@@ -466,7 +471,7 @@ func (s *session) skipOp(op topdown.Op) bool {
 func (s *session) result(t *thread, rs rego.ResultSet) {
 	if rsJson, err := json.MarshalIndent(rs, "", "  "); err == nil {
 		s.d.logger.Debug("Result: %s\n", rsJson)
-		s.d.eventHandler(StdoutEventType, t.id, string(rsJson))
+		s.d.sendEvent(DebugEvent{Type: StdoutEventType, Thread: t.id, Message: string(rsJson)})
 	} else {
 		s.d.logger.Debug("Result: %v\n", rs)
 	}
@@ -589,6 +594,8 @@ func (d *Debugger) SetBreakpoints(locations []location.Location) ([]Breakpoint, 
 		bps = append(bps, d.session.breakpoints.add(loc))
 	}
 
+	d.logger.Info("Breakpoints set: %s", bps)
+
 	return bps, nil
 }
 
@@ -615,13 +622,23 @@ func (s *session) terminate() error {
 			hasErrors = true
 			s.d.logger.Error("Failed to stop thread %d: %v", t.id, err)
 		} else {
-			s.d.eventHandler(ThreadEventType, t.id, "exited")
+			s.d.sendEvent(DebugEvent{Type: ThreadEventType, Thread: t.id, Message: "exited"})
 		}
 	}
 
 	if !hasErrors {
-		s.d.eventHandler(TerminatedEventType, 0, "")
+		s.d.sendEvent(DebugEvent{Type: TerminatedEventType})
 	}
 
 	return nil
+}
+
+func (d *Debugger) sendEvent(e DebugEvent) {
+	if d == nil || d.eventHandler == nil {
+		return
+	}
+
+	d.logger.Debug("Sending event: %v", e)
+
+	d.eventHandler(e)
 }

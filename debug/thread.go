@@ -26,7 +26,7 @@ const (
 	stopAction  eventAction = "stop"
 )
 
-type eventHandler func(t *thread, e *topdown.Event, s threadState) (eventAction, threadState, error)
+type eventHandler func(t *thread, stackIndex int, e *topdown.Event, s threadState) (eventAction, threadState, error)
 
 type Thread interface {
 	Id() int
@@ -88,6 +88,7 @@ func (t *thread) run(ctx context.Context) error {
 }
 
 func (t *thread) resume() error {
+	t.logger.Debug("Resuming thread: %d", t.id)
 	t.breakpointLatch.unblock()
 	return nil
 }
@@ -102,18 +103,26 @@ func (t *thread) stepIn() error {
 		return fmt.Errorf("thread stopped")
 	}
 
-	id, e := t.stack.Next()
-	t.logger.Debug("Step-in on event: #%d", id)
+	i, e := t.stack.Next()
+	t.logger.Debug("Step-in on event: #%d", i)
 
-	a, s, err := t.eventHandler(t, e, t.state)
+	// The thread could get resumed by another goroutine before the eventHandler returns, so we preemptively lock the
+	// breakpoint latch and unlock it of we're not supposed to break.
+	// FIXME: Should we move all latch management to run()?
+	t.logger.Debug("Preemptively blocking breakpoint latch")
+	t.breakpointLatch.block()
+
+	a, s, err := t.eventHandler(t, i, e, t.state)
 	if err != nil {
 		return err
 	}
 	t.state = s
 
-	if a == breakAction {
-		t.logger.Debug("Blocking breakpoint latch")
-		t.breakpointLatch.block()
+	if a != breakAction {
+		t.logger.Debug("No break requested; unblocking breakpoint latch")
+		t.breakpointLatch.unblock()
+	} else {
+		t.logger.Debug("break requested; not unblocking breakpoint latch")
 	}
 
 	return nil
@@ -132,14 +141,14 @@ func (t *thread) stepOver() error {
 	baseQueryVisited := false
 Loop:
 	for {
-		id, e := t.stack.Next()
-		t.logger.Debug("Step-over on event: #%d", id)
+		i, e := t.stack.Next()
+		t.logger.Debug("Step-over on event: #%d", i)
 
 		if e != nil && e.QueryID == 0 {
 			baseQueryVisited = true
 		}
 
-		a, s, err := t.eventHandler(t, e, t.state)
+		a, s, err := t.eventHandler(t, i, e, t.state)
 		if err != nil {
 			return err
 		}
@@ -191,10 +200,10 @@ func (t *thread) stepOut() error {
 	}
 
 	for {
-		id, e := t.stack.Next()
-		t.logger.Debug("Step-out on event: #%d", id)
+		i, e := t.stack.Next()
+		t.logger.Debug("Step-out on event: #%d", i)
 
-		a, s, err := t.eventHandler(t, e, t.state)
+		a, s, err := t.eventHandler(t, i, e, t.state)
 		if err != nil {
 			return err
 		}

@@ -4,6 +4,8 @@
 
 package debug
 
+import "github.com/open-policy-agent/opa/topdown"
+
 type EventType string
 
 const (
@@ -14,8 +16,17 @@ const (
 	ThreadEventType     = "thread"
 )
 
-type EventHandler func(eventType EventType, threadId int, text string)
+// FIXME: Rename?
+type DebugEvent struct {
+	Type       EventType
+	Thread     int
+	Message    string
+	stackIndex int
+	stackEvent *topdown.Event
+}
+
+type EventHandler func(DebugEvent)
 
 func newNopEventHandler() EventHandler {
-	return func(_ EventType, _ int, _ string) {}
+	return func(_ DebugEvent) {}
 }

@@ -6,6 +6,8 @@ package debug
 
 import (
 	"context"
+	"fmt"
+	"reflect"
 	"testing"
 	"time"
 
@@ -54,24 +56,60 @@ func TestDebuggerAutomaticStop(t *testing.T) {
 		},
 	}
 
+	testEvents := []*topdown.Event{
+		{ // 0
+			Op: topdown.EvalOp,
+		},
+		{ // 1
+			Op: topdown.EnterOp,
+			Location: &location.Location{
+				File: "test.rego",
+				Row:  1,
+			},
+		},
+		{ // 2
+			Op: topdown.EvalOp,
+			Location: &location.Location{
+				File: "test.rego",
+				Row:  2,
+			},
+		},
+		{ // 3
+			Op: topdown.FailOp,
+			Location: &location.Location{
+				File: "test.rego",
+				Row:  2,
+			},
+		},
+		{ // 4
+			Op: topdown.RedoOp,
+			Location: &location.Location{
+				File: "test.rego",
+				Row:  2,
+			},
+		},
+		{ // 5
+			Op: topdown.ExitOp,
+			Location: &location.Location{
+				File: "test.rego",
+				Row:  1,
+			},
+		},
+	}
+
 	for _, tc := range tests {
 		t.Run(tc.note, func(t *testing.T) {
 			ctx, cancel := context.WithCancel(context.Background())
 			defer cancel()
 
 			stk := newTestStack(testEvents...)
-
 			eh := newTestEventHandler()
-			l := logging.NewNoOpLogger()
-
-			d := NewDebugger(ctx, SetLogger(l), SetEventHandler(eh.HandleEvent))
-			thr := newThread(1, "test", stk, d.varManager, l)
-			s := newSession(d, tc.props, []*thread{thr})
+			_, s := setupDebuggerSession(ctx, stk, tc.props, eh.HandleEvent, nil)
 			s.start(ctx)
 
 			test.EventuallyOrFatal(t, 5*time.Second, func() bool {
 				e := eh.Next(10 * time.Millisecond)
-				if e != nil && e.eventType == tc.expEventType {
+				if e != nil && e.Type == tc.expEventType {
 					i, _ := stk.Current()
 					return i == tc.expEventIndex
 				}
@@ -81,31 +119,191 @@ func TestDebuggerAutomaticStop(t *testing.T) {
 	}
 }
 
-type testEvent struct {
-	eventType EventType
-	threadId  int
-	text      string
+func TestDebuggerStopOnBreakpoint(t *testing.T) {
+	tests := []struct {
+		note            string
+		breakpoint      location.Location
+		events          []*topdown.Event
+		expEventIndices []int
+	}{
+		{
+			note:       "breakpoint on line with single event",
+			breakpoint: location.Location{File: "test.rego", Row: 1},
+			events: []*topdown.Event{
+				{ // 0
+					Op: topdown.EvalOp,
+				},
+				{ // 1
+					Op: topdown.EnterOp,
+					Location: &location.Location{
+						File: "test.rego",
+						Row:  1,
+					},
+				},
+				{ // 2
+					Op: topdown.EvalOp,
+					Location: &location.Location{
+						File: "test.rego",
+						Row:  2,
+					},
+				},
+			},
+			expEventIndices: []int{1},
+		},
+		{
+			note:       "breakpoint on line with single event (2)",
+			breakpoint: location.Location{File: "test.rego", Row: 2},
+			events: []*topdown.Event{
+				{ // 0
+					Op: topdown.EvalOp,
+				},
+				{ // 1
+					Op: topdown.EnterOp,
+					Location: &location.Location{
+						File: "test.rego",
+						Row:  1,
+					},
+				},
+				{ // 2
+					Op: topdown.EvalOp,
+					Location: &location.Location{
+						File: "test.rego",
+						Row:  2,
+					},
+				},
+			},
+			expEventIndices: []int{2},
+		},
+		{
+			note:       "breakpoint on line with multiple consecutive events",
+			breakpoint: location.Location{File: "test.rego", Row: 2},
+			events: []*topdown.Event{
+				{ // 0
+					Op: topdown.EvalOp,
+				},
+				{ // 1
+					Op: topdown.EnterOp,
+					Location: &location.Location{
+						File: "test.rego",
+						Row:  1,
+					},
+				},
+				{ // 2
+					Op: topdown.EvalOp,
+					Location: &location.Location{
+						File: "test.rego",
+						Row:  2,
+					},
+				},
+				{ // 3
+					Op: topdown.UnifyOp,
+					Location: &location.Location{
+						File: "test.rego",
+						Row:  2,
+					},
+				},
+				{ // 4
+					Op: topdown.EvalOp,
+					Location: &location.Location{
+						File: "test.rego",
+						Row:  3,
+					},
+				},
+			},
+			expEventIndices: []int{2, 3},
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.note, func(t *testing.T) {
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+
+			stk := newTestStack(tc.events...)
+			eh := newTestEventHandler()
+			l := logging.New()
+			l.SetLevel(logging.Debug)
+			d, s := setupDebuggerSession(ctx, stk, LaunchProperties{}, eh.HandleEvent, l)
+
+			bps, err := d.SetBreakpoints([]location.Location{tc.breakpoint})
+			if err != nil {
+				t.Fatalf("Unexpected error: %v", err)
+			}
+
+			if len(bps) != 1 {
+				t.Fatalf("Expected 1 breakpoint, got %d", len(bps))
+			}
+
+			bp := bps[0]
+			if bp.Location().File != tc.breakpoint.File {
+				t.Errorf("Expected breakpoint file %s, got %s", tc.breakpoint.File, bps[0].Location().File)
+			}
+
+			if bp.Location().Row != tc.breakpoint.Row {
+				t.Errorf("Expected breakpoint row %d, got %d", tc.breakpoint.Row, bps[0].Location().Row)
+			}
+
+			s.start(ctx)
+
+			var stoppedAt []int
+			test.EventuallyOrFatal(t, 5*time.Second, func() bool {
+				for {
+					fmt.Println("WAITING FOR EVENT")
+					e := eh.NextBlocking()
+					fmt.Printf("EVENT: %v\n", e)
+					if e == nil || e.Type == TerminatedEventType {
+						return true
+					}
+					if e.Type == StoppedEventType {
+						stoppedAt = append(stoppedAt, e.stackIndex)
+						if err := d.Resume(e.Thread); err != nil {
+							t.Fatalf("Unexpected error resuming: %v", err)
+						}
+					}
+				}
+			})
+
+			if !reflect.DeepEqual(stoppedAt, tc.expEventIndices) {
+				t.Errorf("Expected to stop at event indices %v, got %v", tc.expEventIndices, stoppedAt)
+			}
+
+			fmt.Println("DONE")
+		})
+	}
+}
+
+func setupDebuggerSession(ctx context.Context, stk stack, launchProperties LaunchProperties, eh EventHandler, l logging.Logger) (*Debugger, *session) {
+	if l == nil {
+		l = logging.NewNoOpLogger()
+	}
+
+	opts := []DebuggerOption{SetLogger(l)}
+	if eh != nil {
+		opts = append(opts, SetEventHandler(eh))
+	}
+
+	d := NewDebugger(ctx, opts...)
+	thr := newThread(1, "test", stk, d.varManager, l)
+	s := newSession(d, launchProperties, []*thread{thr})
+
+	return d, s
 }
 
 type testEventHandler struct {
-	ch chan *testEvent
+	ch chan *DebugEvent
 }
 
 func newTestEventHandler() *testEventHandler {
 	return &testEventHandler{
-		ch: make(chan *testEvent),
+		ch: make(chan *DebugEvent),
 	}
 }
 
-func (teh *testEventHandler) HandleEvent(eventType EventType, threadId int, text string) {
-	teh.ch <- &testEvent{
-		eventType: eventType,
-		threadId:  threadId,
-		text:      text,
-	}
+func (teh *testEventHandler) HandleEvent(event DebugEvent) {
+	teh.ch <- &event
 }
 
-func (teh *testEventHandler) Next(duration time.Duration) *testEvent {
+func (teh *testEventHandler) Next(duration time.Duration) *DebugEvent {
 	select {
 	case e := <-teh.ch:
 		return e
@@ -114,54 +312,17 @@ func (teh *testEventHandler) Next(duration time.Duration) *testEvent {
 	}
 }
 
-func (teh *testEventHandler) WaitFor(eventType EventType) *testEvent {
+func (teh *testEventHandler) NextBlocking() *DebugEvent {
+	return <-teh.ch
+}
+
+func (teh *testEventHandler) WaitFor(eventType EventType) *DebugEvent {
 	for {
 		e := <-teh.ch
-		if e.eventType == eventType {
+		if e.Type == eventType {
 			return e
 		}
 	}
-}
-
-var testEvents = []*topdown.Event{
-	{ // 0
-		Op: topdown.EvalOp,
-	},
-	{ // 1
-		Op: topdown.EnterOp,
-		Location: &location.Location{
-			File: "test.rego",
-			Row:  1,
-		},
-	},
-	{ // 2
-		Op: topdown.EvalOp,
-		Location: &location.Location{
-			File: "test.rego",
-			Row:  2,
-		},
-	},
-	{ // 3
-		Op: topdown.FailOp,
-		Location: &location.Location{
-			File: "test.rego",
-			Row:  2,
-		},
-	},
-	{ // 4
-		Op: topdown.RedoOp,
-		Location: &location.Location{
-			File: "test.rego",
-			Row:  2,
-		},
-	},
-	{ // 5
-		Op: topdown.ExitOp,
-		Location: &location.Location{
-			File: "test.rego",
-			Row:  1,
-		},
-	},
 }
 
 type testStack struct {
@@ -173,6 +334,7 @@ type testStack struct {
 func newTestStack(events ...*topdown.Event) stack {
 	return &testStack{
 		events: events,
+		index:  -1,
 	}
 }
 
@@ -188,7 +350,7 @@ func (ts *testStack) Config() topdown.TraceConfig {
 }
 
 func (ts *testStack) Current() (int, *topdown.Event) {
-	if ts.index >= len(ts.events) {
+	if ts.index < 0 || ts.index >= len(ts.events) {
 		return -1, nil
 	}
 	return ts.index, ts.events[ts.index]
