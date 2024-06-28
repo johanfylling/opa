@@ -79,10 +79,22 @@ func (t *thread) run(ctx context.Context) error {
 		t.breakpointLatch.wait()
 		t.logger.Debug("Breakpoint latch released")
 
-		err := t.stepIn()
+		// The thread could get resumed by another goroutine before the eventHandler returns, so we preemptively lock the
+		// breakpoint latch and unlock it of we're not supposed to break.
+		t.logger.Debug("Preemptively blocking breakpoint latch")
+		t.breakpointLatch.block()
+
+		a, err := t.stepIn()
 		if err != nil {
 			t.stopped = true
 			return err
+		}
+
+		if a == breakAction {
+			t.logger.Debug("break requested; not unblocking breakpoint latch")
+		} else {
+			t.logger.Debug("No break requested; unblocking breakpoint latch")
+			t.breakpointLatch.unblock()
 		}
 	}
 }
@@ -93,39 +105,26 @@ func (t *thread) resume() error {
 	return nil
 }
 
-func (t *thread) current() (*topdown.Event, error) {
-	_, e := t.stack.Current()
-	return e, nil
+func (t *thread) current() (int, *topdown.Event, error) {
+	i, e := t.stack.Current()
+	return i, e, nil
 }
 
-func (t *thread) stepIn() error {
+func (t *thread) stepIn() (eventAction, error) {
 	if t.stopped {
-		return fmt.Errorf("thread stopped")
+		return nopAction, fmt.Errorf("thread stopped")
 	}
 
 	i, e := t.stack.Next()
 	t.logger.Debug("Step-in on event: #%d", i)
 
-	// The thread could get resumed by another goroutine before the eventHandler returns, so we preemptively lock the
-	// breakpoint latch and unlock it of we're not supposed to break.
-	// FIXME: Should we move all latch management to run()?
-	t.logger.Debug("Preemptively blocking breakpoint latch")
-	t.breakpointLatch.block()
-
 	a, s, err := t.eventHandler(t, i, e, t.state)
 	if err != nil {
-		return err
+		return nopAction, err
 	}
 	t.state = s
 
-	if a != breakAction {
-		t.logger.Debug("No break requested; unblocking breakpoint latch")
-		t.breakpointLatch.unblock()
-	} else {
-		t.logger.Debug("break requested; not unblocking breakpoint latch")
-	}
-
-	return nil
+	return a, nil
 }
 
 func (t *thread) stepOver() error {
@@ -133,7 +132,7 @@ func (t *thread) stepOver() error {
 		return fmt.Errorf("thread stopped")
 	}
 
-	startE, err := t.current()
+	_, startE, err := t.current()
 	if err != nil {
 		return err
 	}
@@ -194,7 +193,7 @@ func (t *thread) stepOut() error {
 		return fmt.Errorf("thread stopped")
 	}
 
-	c, err := t.current()
+	_, c, err := t.current()
 	if err != nil {
 		return err
 	}

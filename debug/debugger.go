@@ -308,10 +308,12 @@ func (d *Debugger) StepIn(threadId int) error {
 		return err
 	}
 
-	err = t.stepIn()
+	_, err = t.stepIn()
 	if err == nil {
-		e, _ := t.current()
-		d.sendEvent(DebugEvent{Type: StoppedEventType, Thread: t.id, Message: "entry", stackEvent: e})
+		i, e, _ := t.current()
+		if e != nil {
+			d.sendEvent(DebugEvent{Type: StoppedEventType, Thread: t.id, Message: "entry", stackIndex: i, stackEvent: e})
+		}
 	}
 	if t.done() {
 		d.sendEvent(DebugEvent{Type: ThreadEventType, Thread: t.id, Message: "exited"})

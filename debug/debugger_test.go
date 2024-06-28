@@ -28,7 +28,7 @@ func TestDebuggerAutomaticStop(t *testing.T) {
 		{
 			note:          "No automatic stop",
 			expEventType:  TerminatedEventType,
-			expEventIndex: 5,
+			expEventIndex: -1,
 		},
 		{
 			note: "Stop on entry",
@@ -39,12 +39,12 @@ func TestDebuggerAutomaticStop(t *testing.T) {
 			expEventIndex: 1,
 		},
 		{
-			note: "Stop on result",
+			note: "Stop on end of trace",
 			props: LaunchProperties{
 				StopOnResult: true,
 			},
 			expEventType:  StoppedEventType,
-			expEventIndex: 5,
+			expEventIndex: -1,
 		},
 		{
 			note: "Stop on fail",
@@ -58,38 +58,44 @@ func TestDebuggerAutomaticStop(t *testing.T) {
 
 	testEvents := []*topdown.Event{
 		{ // 0
-			Op: topdown.EvalOp,
+			Op:      topdown.EvalOp,
+			QueryID: 0,
 		},
 		{ // 1
-			Op: topdown.EnterOp,
+			Op:      topdown.EnterOp,
+			QueryID: 1,
 			Location: &location.Location{
 				File: "test.rego",
 				Row:  1,
 			},
 		},
 		{ // 2
-			Op: topdown.EvalOp,
+			Op:      topdown.EvalOp,
+			QueryID: 1,
 			Location: &location.Location{
 				File: "test.rego",
 				Row:  2,
 			},
 		},
 		{ // 3
-			Op: topdown.FailOp,
+			Op:      topdown.FailOp,
+			QueryID: 1,
 			Location: &location.Location{
 				File: "test.rego",
 				Row:  2,
 			},
 		},
 		{ // 4
-			Op: topdown.RedoOp,
+			Op:      topdown.RedoOp,
+			QueryID: 1,
 			Location: &location.Location{
 				File: "test.rego",
 				Row:  2,
 			},
 		},
 		{ // 5
-			Op: topdown.ExitOp,
+			Op:      topdown.ExitOp,
+			QueryID: 1,
 			Location: &location.Location{
 				File: "test.rego",
 				Row:  1,
@@ -104,7 +110,9 @@ func TestDebuggerAutomaticStop(t *testing.T) {
 
 			stk := newTestStack(testEvents...)
 			eh := newTestEventHandler()
-			_, s := setupDebuggerSession(ctx, stk, tc.props, eh.HandleEvent, nil)
+			l := logging.New()
+			l.SetLevel(logging.Debug)
+			_, s, _ := setupDebuggerSession(ctx, stk, tc.props, eh.HandleEvent, l)
 			s.start(ctx)
 
 			test.EventuallyOrFatal(t, 5*time.Second, func() bool {
@@ -131,17 +139,20 @@ func TestDebuggerStopOnBreakpoint(t *testing.T) {
 			breakpoint: location.Location{File: "test.rego", Row: 1},
 			events: []*topdown.Event{
 				{ // 0
-					Op: topdown.EvalOp,
+					Op:      topdown.EvalOp,
+					QueryID: 0,
 				},
 				{ // 1
-					Op: topdown.EnterOp,
+					Op:      topdown.EnterOp,
+					QueryID: 1,
 					Location: &location.Location{
 						File: "test.rego",
 						Row:  1,
 					},
 				},
 				{ // 2
-					Op: topdown.EvalOp,
+					Op:      topdown.EvalOp,
+					QueryID: 1,
 					Location: &location.Location{
 						File: "test.rego",
 						Row:  2,
@@ -155,17 +166,20 @@ func TestDebuggerStopOnBreakpoint(t *testing.T) {
 			breakpoint: location.Location{File: "test.rego", Row: 2},
 			events: []*topdown.Event{
 				{ // 0
-					Op: topdown.EvalOp,
+					Op:      topdown.EvalOp,
+					QueryID: 0,
 				},
 				{ // 1
-					Op: topdown.EnterOp,
+					Op:      topdown.EnterOp,
+					QueryID: 1,
 					Location: &location.Location{
 						File: "test.rego",
 						Row:  1,
 					},
 				},
 				{ // 2
-					Op: topdown.EvalOp,
+					Op:      topdown.EvalOp,
+					QueryID: 1,
 					Location: &location.Location{
 						File: "test.rego",
 						Row:  2,
@@ -179,31 +193,36 @@ func TestDebuggerStopOnBreakpoint(t *testing.T) {
 			breakpoint: location.Location{File: "test.rego", Row: 2},
 			events: []*topdown.Event{
 				{ // 0
-					Op: topdown.EvalOp,
+					Op:      topdown.EvalOp,
+					QueryID: 0,
 				},
 				{ // 1
-					Op: topdown.EnterOp,
+					Op:      topdown.EnterOp,
+					QueryID: 1,
 					Location: &location.Location{
 						File: "test.rego",
 						Row:  1,
 					},
 				},
 				{ // 2
-					Op: topdown.EvalOp,
+					Op:      topdown.EvalOp,
+					QueryID: 1,
 					Location: &location.Location{
 						File: "test.rego",
 						Row:  2,
 					},
 				},
 				{ // 3
-					Op: topdown.UnifyOp,
+					Op:      topdown.UnifyOp,
+					QueryID: 1,
 					Location: &location.Location{
 						File: "test.rego",
 						Row:  2,
 					},
 				},
 				{ // 4
-					Op: topdown.EvalOp,
+					Op:      topdown.EvalOp,
+					QueryID: 1,
 					Location: &location.Location{
 						File: "test.rego",
 						Row:  3,
@@ -266,9 +285,7 @@ func TestDebuggerStopOnBreakpoint(t *testing.T) {
 
 			stk := newTestStack(tc.events...)
 			eh := newTestEventHandler()
-			l := logging.New()
-			l.SetLevel(logging.Debug)
-			d, s := setupDebuggerSession(ctx, stk, LaunchProperties{}, eh.HandleEvent, l)
+			d, s, _ := setupDebuggerSession(ctx, stk, LaunchProperties{}, eh.HandleEvent, nil)
 
 			bps, err := d.SetBreakpoints([]location.Location{tc.breakpoint})
 			if err != nil {
@@ -293,9 +310,7 @@ func TestDebuggerStopOnBreakpoint(t *testing.T) {
 			var stoppedAt []int
 			test.EventuallyOrFatal(t, 5*time.Second, func() bool {
 				for {
-					fmt.Println("WAITING FOR EVENT")
 					e := eh.NextBlocking()
-					fmt.Printf("EVENT: %v\n", e)
 					if e == nil || e.Type == TerminatedEventType {
 						return true
 					}
@@ -311,13 +326,163 @@ func TestDebuggerStopOnBreakpoint(t *testing.T) {
 			if !reflect.DeepEqual(stoppedAt, tc.expEventIndices) {
 				t.Errorf("Expected to stop at event indices %v, got %v", tc.expEventIndices, stoppedAt)
 			}
-
-			fmt.Println("DONE")
 		})
 	}
 }
 
-func setupDebuggerSession(ctx context.Context, stk stack, launchProperties LaunchProperties, eh EventHandler, l logging.Logger) (*Debugger, *session) {
+// TODO: Test resume
+
+func TestDebuggerStepIn(t *testing.T) {
+	tests := []struct {
+		note            string
+		events          []*topdown.Event
+		expEventIndices []int
+	}{
+		{
+			note: "single query",
+			events: []*topdown.Event{
+				{ // 0
+					Op:      topdown.EvalOp,
+					QueryID: 1,
+				},
+				{ // 1
+					Op:      topdown.EvalOp,
+					QueryID: 1,
+				},
+				{ // 2
+					Op:      topdown.EvalOp,
+					QueryID: 1,
+				},
+			},
+			expEventIndices: []int{0, 1, 2},
+		},
+		{
+			note: "multiple nested queries",
+			events: []*topdown.Event{
+				{ // 0
+					Op:      topdown.EvalOp,
+					QueryID: 0,
+				},
+				{ // 1
+					Op:      topdown.EvalOp,
+					QueryID: 1,
+				},
+				{ // 2
+					Op:      topdown.EvalOp,
+					QueryID: 2,
+				},
+				{ // 3
+					Op:      topdown.RedoOp,
+					QueryID: 2,
+				},
+				{ // 4
+					Op:      topdown.RedoOp,
+					QueryID: 1,
+				},
+				{ // 5
+					Op:      topdown.RedoOp,
+					QueryID: 0,
+				},
+			},
+			expEventIndices: []int{0, 1, 2, 3, 4, 5},
+		},
+		{
+			note: "multiple queries",
+			events: []*topdown.Event{
+				{ // 0
+					Op:      topdown.EvalOp,
+					QueryID: 0,
+				},
+				{ // 1
+					Op:      topdown.EvalOp,
+					QueryID: 1,
+				},
+				{ // 2
+					Op:      topdown.EvalOp,
+					QueryID: 2,
+				},
+				{ // 3
+					Op:      topdown.RedoOp,
+					QueryID: 2,
+				},
+				{ // 4
+					Op:      topdown.RedoOp,
+					QueryID: 1,
+				},
+				{ // 5
+					Op:      topdown.RedoOp,
+					QueryID: 0,
+				},
+				{ // 6
+					Op:      topdown.EvalOp,
+					QueryID: 1,
+				},
+				{ // 7
+					Op:      topdown.EvalOp,
+					QueryID: 2,
+				},
+			},
+			expEventIndices: []int{0, 1, 2, 3, 4, 5, 6, 7},
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.note, func(t *testing.T) {
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+
+			stk := newTestStack(tc.events...)
+			eh := newTestEventHandler()
+			d, _, thr := setupDebuggerSession(ctx, stk, LaunchProperties{}, eh.HandleEvent, nil)
+
+			var stoppedAt []int
+			doneCh := make(chan struct{})
+			defer close(doneCh)
+			go func() {
+				for {
+					fmt.Println("WAITING FOR EVENT")
+					e := eh.NextBlocking()
+					fmt.Printf("EVENT: %v\n", e)
+
+					if e == nil || e.Type == TerminatedEventType {
+						break
+					}
+
+					if e.Type == StoppedEventType {
+						stoppedAt = append(stoppedAt, e.stackIndex)
+					}
+				}
+				fmt.Println("DONE")
+				doneCh <- struct{}{}
+			}()
+
+			go func() {
+				for {
+					if err := d.StepIn(thr.id); err != nil {
+						t.Errorf("Unexpected error stepping in: %v", err)
+						break
+					}
+				}
+			}()
+
+			select {
+			//case <-time.After(5 * time.Second):
+			//	t.Fatal("Timed out waiting for debugger to finish")
+			case <-doneCh:
+			}
+
+			if !reflect.DeepEqual(stoppedAt, tc.expEventIndices) {
+				t.Errorf("Expected to stop at event indices %v, got %v", tc.expEventIndices, stoppedAt)
+			}
+		})
+	}
+}
+
+// TODO: Test step-over
+
+// TODO: Test step-out
+
+func setupDebuggerSession(ctx context.Context, stk stack, launchProperties LaunchProperties, eh EventHandler, l logging.Logger) (*Debugger, *session, *thread) {
 	if l == nil {
 		l = logging.NewNoOpLogger()
 	}
@@ -328,10 +493,10 @@ func setupDebuggerSession(ctx context.Context, stk stack, launchProperties Launc
 	}
 
 	d := NewDebugger(ctx, opts...)
-	thr := newThread(1, "test", stk, d.varManager, l)
-	s := newSession(d, launchProperties, []*thread{thr})
+	t := newThread(1, "test", stk, d.varManager, l)
+	s := newSession(d, launchProperties, []*thread{t})
 
-	return d, s
+	return d, s, t
 }
 
 type testEventHandler struct {
@@ -384,7 +549,7 @@ func newTestStack(events ...*topdown.Event) stack {
 }
 
 func (ts *testStack) Enabled() bool {
-	return false
+	return true
 }
 
 func (ts *testStack) TraceEvent(_ topdown.Event) {
@@ -410,6 +575,7 @@ func (ts *testStack) Event(i int) *topdown.Event {
 
 func (ts *testStack) Next() (int, *topdown.Event) {
 	if ts.closed || ts.index >= len(ts.events)-1 {
+		ts.index++
 		return -1, nil
 	}
 	ts.index++
