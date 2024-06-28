@@ -212,6 +212,51 @@ func TestDebuggerStopOnBreakpoint(t *testing.T) {
 			},
 			expEventIndices: []int{2, 3},
 		},
+		{
+			note:       "breakpoint on reoccurring line",
+			breakpoint: location.Location{File: "test.rego", Row: 2},
+			events: []*topdown.Event{
+				{ // 0
+					Op: topdown.EvalOp,
+				},
+				{ // 1
+					Op: topdown.EnterOp,
+					Location: &location.Location{
+						File: "test.rego",
+						Row:  1,
+					},
+				},
+				{ // 2
+					Op: topdown.EvalOp,
+					Location: &location.Location{
+						File: "test.rego",
+						Row:  2,
+					},
+				},
+				{ // 3
+					Op: topdown.EvalOp,
+					Location: &location.Location{
+						File: "test.rego",
+						Row:  3,
+					},
+				},
+				{ // 4
+					Op: topdown.RedoOp,
+					Location: &location.Location{
+						File: "test.rego",
+						Row:  2,
+					},
+				},
+				{ // 5
+					Op: topdown.RedoOp,
+					Location: &location.Location{
+						File: "test.rego",
+						Row:  1,
+					},
+				},
+			},
+			expEventIndices: []int{2, 4},
+		},
 	}
 
 	for _, tc := range tests {
