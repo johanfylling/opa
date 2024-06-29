@@ -74,10 +74,11 @@ func SetEventHandler(handler EventHandler) DebuggerOption {
 }
 
 type LaunchProperties struct {
-	BundlePaths  []string     `json:"bundles"`
+	BundlePaths  []string     `json:"bundle_paths"`
 	Command      string       `json:"command"`
-	DataPaths    []string     `json:"data"`
-	InputPath    string       `json:"input"`
+	DataPaths    []string     `json:"data_paths"`
+	Input        interface{}  `json:"input"`
+	InputPath    string       `json:"input_path"`
 	LogLevel     string       `json:"log_level"`
 	Query        string       `json:"query"`
 	StopOnResult bool         `json:"stop_on_result"`
@@ -117,7 +118,13 @@ func (d *Debugger) LaunchEval(props LaunchProperties) error {
 		regoArgs = append(regoArgs, rego.LoadBundle(bundlePath))
 	}
 
-	if props.InputPath != "" {
+	if props.InputPath != "" && props.Input != nil {
+		return fmt.Errorf("cannot specify both input and input path")
+	}
+
+	if props.Input != nil {
+		regoArgs = append(regoArgs, rego.Input(props.Input))
+	} else if props.InputPath != "" {
 		input, err := readInput(props.InputPath)
 		if err != nil {
 			return fmt.Errorf("failed to read input: %v", err)
