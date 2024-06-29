@@ -4,7 +4,12 @@
 
 package debug
 
-import "github.com/open-policy-agent/opa/topdown"
+import (
+	"fmt"
+	"strings"
+
+	"github.com/open-policy-agent/opa/topdown"
+)
 
 type EventType string
 
@@ -23,6 +28,25 @@ type DebugEvent struct {
 	Message    string
 	stackIndex int
 	stackEvent *topdown.Event
+}
+
+func (d DebugEvent) String() string {
+	buf := new(strings.Builder)
+
+	buf.WriteString(fmt.Sprintf("%s{", d.Type))
+	buf.WriteString(fmt.Sprintf("thread=%d", d.Thread))
+
+	if d.Message != "" {
+		buf.WriteString(fmt.Sprintf(", message=%q", d.Message))
+	}
+
+	if d.stackEvent != nil {
+		buf.WriteString(fmt.Sprintf(", stackIndex=%d", d.stackIndex))
+	}
+
+	buf.WriteString("}")
+
+	return buf.String()
 }
 
 type EventHandler func(DebugEvent)

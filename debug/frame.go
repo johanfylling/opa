@@ -5,6 +5,8 @@
 package debug
 
 import (
+	"fmt"
+
 	"github.com/open-policy-agent/opa/ast/location"
 )
 
@@ -12,6 +14,10 @@ type StackFrame struct {
 	Id       int
 	Name     string
 	Location *location.Location
+}
+
+func (f *StackFrame) String() string {
+	return fmt.Sprintf("{id: %d, name: %v, location: %v}", f.Id, f.Name, f.Location)
 }
 
 type frameInfo struct {

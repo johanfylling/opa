@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"os"
 	"slices"
+	"strings"
 
 	"github.com/open-policy-agent/opa/ast/location"
 	fileurl "github.com/open-policy-agent/opa/internal/file/url"
@@ -502,12 +503,12 @@ func (d *Debugger) StackTrace(threadId int) ([]StackFrame, error) {
 
 	stackIndex := 0
 	if len(threadFrames) > 0 {
-		stackIndex = threadFrames[len(threadFrames)-1].stackIndex
+		stackIndex = threadFrames[len(threadFrames)-1].stackIndex + 1
 	}
-	newEvents := t.stackEvents(stackIndex + 1)
+	newEvents := t.stackEvents(stackIndex)
 	for _, e := range newEvents {
-		stackIndex++
 		info := d.session.newStackFrame(e, t, stackIndex)
+		stackIndex++
 		threadFrames = append(threadFrames, info)
 	}
 	d.session.framesByThread[t.id] = threadFrames
@@ -528,7 +529,7 @@ func (s *session) newStackFrame(e *topdown.Event, t *thread, stackIndex int) *fr
 	if e.Node != nil {
 		pretty := new(bytes.Buffer)
 		topdown.PrettyTrace(pretty, []*topdown.Event{e})
-		expl = pretty.String()
+		expl = strings.Trim(pretty.String(), "\n")
 	} else {
 		expl = fmt.Sprintf("%s, %s", e.Op, e.Location)
 	}

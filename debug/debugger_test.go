@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/open-policy-agent/opa/ast"
 	"github.com/open-policy-agent/opa/ast/location"
 	"github.com/open-policy-agent/opa/logging"
 	"github.com/open-policy-agent/opa/rego"
@@ -620,9 +621,7 @@ func TestDebuggerStepOver(t *testing.T) {
 			defer close(doneCh)
 			go func() {
 				for {
-					fmt.Println("WAITING FOR EVENT")
 					e := eh.NextBlocking()
-					fmt.Printf("EVENT: %v\n", e)
 
 					if e == nil || e.Type == TerminatedEventType {
 						break
@@ -632,7 +631,6 @@ func TestDebuggerStepOver(t *testing.T) {
 						stoppedAt = append(stoppedAt, e.stackIndex)
 					}
 				}
-				fmt.Println("DONE")
 				doneCh <- struct{}{}
 			}()
 
@@ -810,13 +808,148 @@ func TestDebuggerStepOut(t *testing.T) {
 			}()
 
 			select {
-			//case <-time.After(5 * time.Second):
-			//	t.Fatal("Timed out waiting for debugger to finish")
+			case <-time.After(5 * time.Second):
+				t.Fatal("Timed out waiting for debugger to finish")
 			case <-doneCh:
 			}
 
 			if !reflect.DeepEqual(stoppedAt, tc.expEventIndices) {
 				t.Errorf("Expected to stop at event indices %v, got %v", tc.expEventIndices, stoppedAt)
+			}
+		})
+	}
+}
+
+func TestDebuggerStackTrace(t *testing.T) {
+	tests := []struct {
+		note     string
+		events   []*topdown.Event
+		expTrace []StackFrame
+	}{
+		{
+			note:     "empty stack",
+			expTrace: []StackFrame{},
+		},
+		{
+			note: "single stack frame, no event node",
+			events: []*topdown.Event{
+				{
+					Op:      topdown.EvalOp,
+					QueryID: 1,
+					Location: &location.Location{
+						File: "test.rego",
+						Row:  42,
+					},
+				},
+			},
+			expTrace: []StackFrame{
+				{
+					Id:   1,
+					Name: "#1: 1 Eval, test.rego:42",
+					Location: &location.Location{
+						File: "test.rego",
+						Row:  42,
+					},
+				},
+			},
+		},
+		{
+			note: "single stack frame, event node",
+			events: []*topdown.Event{
+				{
+					Op:      topdown.EvalOp,
+					Node:    ast.MustParseExpr("data.test.p[x]"),
+					QueryID: 1,
+					Location: &location.Location{
+						File: "test.rego",
+						Row:  42,
+					},
+				},
+			},
+			expTrace: []StackFrame{
+				{
+					Id:   1,
+					Name: "#1: 1 | Eval data.test.p[x]",
+					Location: &location.Location{
+						File: "test.rego",
+						Row:  42,
+					},
+				},
+			},
+		},
+		{
+			note: "multiple stack frames",
+			events: []*topdown.Event{
+				{
+					Op:      topdown.EvalOp,
+					Node:    ast.MustParseExpr("y := data.test.p[x]"),
+					QueryID: 5,
+					Location: &location.Location{
+						File: "test.rego",
+						Row:  2,
+					},
+				},
+				{
+					Op:      topdown.UnifyOp,
+					Node:    ast.MustParseExpr("y = 1"),
+					QueryID: 5,
+					Location: &location.Location{
+						File: "test.rego",
+						Row:  3,
+					},
+				},
+			},
+			// Reversed order
+			expTrace: []StackFrame{
+				{
+					Id:   2,
+					Name: "#2: 5 | Unify y = 1",
+					Location: &location.Location{
+						File: "test.rego",
+						Row:  3,
+					},
+				},
+				{
+					Id:   1,
+					Name: "#1: 5 | Eval assign(y, data.test.p[x])",
+					Location: &location.Location{
+						File: "test.rego",
+						Row:  2,
+					},
+				},
+			},
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.note, func(t *testing.T) {
+			ctx, cancel := context.WithDeadline(context.Background(), time.Now().Add(5*time.Second))
+			defer cancel()
+
+			l := logging.New()
+			l.SetLevel(logging.Debug)
+
+			stk := newTestStack(tc.events...)
+			eh := newTestEventHandler()
+			d, s, thr := setupDebuggerSession(ctx, stk, LaunchProperties{}, eh.HandleEvent, l)
+
+			s.start(ctx)
+
+			if e := eh.WaitFor(ctx, TerminatedEventType); e == nil {
+				t.Fatal("Run never terminated")
+			}
+
+			trace, err := d.StackTrace(thr.id)
+			if err != nil {
+				t.Fatalf("Unexpected error: %v", err)
+			}
+
+			if len(trace) != len(tc.expTrace) {
+				t.Fatalf("Expected %d stack frames, got %d", len(tc.expTrace), len(trace))
+			}
+
+			if !reflect.DeepEqual(trace, tc.expTrace) {
+				t.Errorf("Expected stack trace:\n\n%v\n\ngot:\n\n%v", tc.expTrace, trace)
 			}
 		})
 	}
@@ -866,13 +999,29 @@ func (teh *testEventHandler) NextBlocking() *DebugEvent {
 	return <-teh.ch
 }
 
-func (teh *testEventHandler) WaitFor(eventType EventType) *DebugEvent {
+func (teh *testEventHandler) WaitFor(ctx context.Context, eventType EventType) *DebugEvent {
 	for {
-		e := <-teh.ch
-		if e.Type == eventType {
-			return e
+		select {
+		case e := <-teh.ch:
+			if e.Type == eventType {
+				return e
+			}
+		case <-ctx.Done():
+			return nil
 		}
 	}
+}
+
+func (teh *testEventHandler) IgnoreAll(ctx context.Context) {
+	go func() {
+		for {
+			select {
+			case <-teh.ch:
+			case <-ctx.Done():
+				return
+			}
+		}
+	}()
 }
 
 type testStack struct {
@@ -881,11 +1030,19 @@ type testStack struct {
 	closed bool
 }
 
-func newTestStack(events ...*topdown.Event) stack {
+func newTestStack(events ...*topdown.Event) *testStack {
 	return &testStack{
 		events: events,
 		index:  -1,
 	}
+}
+
+func (ts *testStack) done() bool {
+	return ts.index >= len(ts.events)
+}
+
+func (ts *testStack) onLastEvent() bool {
+	return ts.index == len(ts.events)-1
 }
 
 func (ts *testStack) Enabled() bool {
@@ -907,7 +1064,7 @@ func (ts *testStack) Current() (int, *topdown.Event) {
 }
 
 func (ts *testStack) Event(i int) *topdown.Event {
-	if ts.closed || i >= 0 && i < len(ts.events) {
+	if !ts.closed || i >= 0 && i < len(ts.events) {
 		return ts.events[i]
 	}
 	return nil
