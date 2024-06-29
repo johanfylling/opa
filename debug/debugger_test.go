@@ -8,6 +8,7 @@ import (
 	"context"
 	"fmt"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 
@@ -1086,6 +1087,24 @@ func TestDebuggerScopeVariables(t *testing.T) {
 									val: "3",
 								},
 							},
+						},
+					},
+				},
+			},
+		},
+		{
+			note: "local var with long text description",
+			locals: map[ast.Var]ast.Value{
+				ast.Var("x"): ast.String(strings.Repeat("x", 1000)),
+			},
+			expScopes: map[string]scopeInfo{
+				"Locals": {
+					name:           "Locals",
+					namedVariables: 1,
+					variables: map[string]varInfo{
+						"x": {
+							typ: "string",
+							val: fmt.Sprintf(`"%s...`, strings.Repeat("x", 97)),
 						},
 					},
 				},

@@ -52,7 +52,7 @@ func (vs *variableManager) vars(varRef int) ([]Variable, error) {
 		vars[i] = Variable{
 			Name:               nv.Name,
 			Type:               valueTypeName(nv.Value),
-			Value:              nv.Value.String(),
+			Value:              truncatedString(nv.Value.String(), 100),
 			VariablesReference: vs.subVars(nv.Value),
 		}
 	}
@@ -62,6 +62,13 @@ func (vs *variableManager) vars(varRef int) ([]Variable, error) {
 	})
 
 	return vars, nil
+}
+
+func truncatedString(s string, max int) string {
+	if len(s) > max {
+		return s[:max-2] + "..."
+	}
+	return s
 }
 
 func valueTypeName(v ast.Value) string {
