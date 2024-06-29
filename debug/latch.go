@@ -7,26 +7,31 @@ package debug
 import "sync"
 
 type latch struct {
-	paused bool
-	lock   sync.WaitGroup
+	paused    bool
+	waitGroup sync.WaitGroup
+	lock      sync.Mutex
 }
 
 func (l *latch) block() {
+	l.lock.Lock()
+	defer l.lock.Unlock()
 	if !l.paused {
-		l.lock.Add(1)
+		l.waitGroup.Add(1)
 		l.paused = true
 	}
 }
 
 func (l *latch) unblock() {
+	l.lock.Lock()
+	defer l.lock.Unlock()
 	if l.paused {
-		l.lock.Done()
+		l.waitGroup.Done()
 		l.paused = false
 	}
 }
 
 func (l *latch) wait() {
-	l.lock.Wait()
+	l.waitGroup.Wait()
 }
 
 func (l *latch) Close() {

@@ -267,7 +267,7 @@ func (d *Debugger) Resume(threadId int) error {
 	return t.resume()
 }
 
-func (d *Debugger) Next(threadId int) error {
+func (d *Debugger) StepOver(threadId int) error {
 	if d == nil || d.session == nil {
 		return fmt.Errorf("no active debug session")
 	}
@@ -279,7 +279,10 @@ func (d *Debugger) Next(threadId int) error {
 
 	err = t.stepOver()
 	if err == nil {
-		d.sendEvent(DebugEvent{Type: StoppedEventType, Thread: t.id, Message: "entry"})
+		i, e, _ := t.current()
+		if e != nil {
+			d.sendEvent(DebugEvent{Type: StoppedEventType, Thread: t.id, Message: "step", stackIndex: i, stackEvent: e})
+		}
 	}
 	if t.done() {
 		d.sendEvent(DebugEvent{Type: ThreadEventType, Thread: t.id, Message: "exited"})
@@ -312,7 +315,7 @@ func (d *Debugger) StepIn(threadId int) error {
 	if err == nil {
 		i, e, _ := t.current()
 		if e != nil {
-			d.sendEvent(DebugEvent{Type: StoppedEventType, Thread: t.id, Message: "entry", stackIndex: i, stackEvent: e})
+			d.sendEvent(DebugEvent{Type: StoppedEventType, Thread: t.id, Message: "step", stackIndex: i, stackEvent: e})
 		}
 	}
 	if t.done() {
@@ -344,7 +347,10 @@ func (d *Debugger) StepOut(threadId int) error {
 
 	err = t.stepOut()
 	if err == nil {
-		d.sendEvent(DebugEvent{Type: StoppedEventType, Thread: t.id, Message: "entry"})
+		i, e, _ := t.current()
+		if e != nil {
+			d.sendEvent(DebugEvent{Type: StoppedEventType, Thread: t.id, Message: "step", stackIndex: i, stackEvent: e})
+		}
 	}
 	if t.done() {
 		d.sendEvent(DebugEvent{Type: ThreadEventType, Thread: t.id, Message: "exited"})

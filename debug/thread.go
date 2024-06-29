@@ -217,7 +217,7 @@ func (t *thread) stepOut() error {
 			qid = e.QueryID
 		}
 
-		if a == breakAction || e == nil || c != nil && qid < c.QueryID {
+		if a == breakAction || e == nil || c == nil || qid < c.QueryID {
 			t.logger.Debug("Resuming on query: %d", qid)
 			break
 		} else {

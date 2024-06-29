@@ -357,7 +357,7 @@ func TestDebuggerStepIn(t *testing.T) {
 			expEventIndices: []int{0, 1, 2},
 		},
 		{
-			note: "multiple nested queries",
+			note: "nested queries",
 			events: []*topdown.Event{
 				{ // 0
 					Op:      topdown.EvalOp,
@@ -387,7 +387,7 @@ func TestDebuggerStepIn(t *testing.T) {
 			expEventIndices: []int{0, 1, 2, 3, 4, 5},
 		},
 		{
-			note: "multiple queries",
+			note: "sequential queries",
 			events: []*topdown.Event{
 				{ // 0
 					Op:      topdown.EvalOp,
@@ -466,6 +466,350 @@ func TestDebuggerStepIn(t *testing.T) {
 			}()
 
 			select {
+			case <-time.After(5 * time.Second):
+				t.Fatal("Timed out waiting for debugger to finish")
+			case <-doneCh:
+			}
+
+			if !reflect.DeepEqual(stoppedAt, tc.expEventIndices) {
+				t.Errorf("Expected to stop at event indices %v, got %v", tc.expEventIndices, stoppedAt)
+			}
+		})
+	}
+}
+
+func TestDebuggerStepOver(t *testing.T) {
+	tests := []struct {
+		note            string
+		events          []*topdown.Event
+		expEventIndices []int
+	}{
+		{
+			note: "single query",
+			events: []*topdown.Event{
+				{ // 0
+					Op:      topdown.EvalOp,
+					QueryID: 1,
+				},
+				{ // 1
+					Op:      topdown.EvalOp,
+					QueryID: 1,
+				},
+				{ // 2
+					Op:      topdown.EvalOp,
+					QueryID: 1,
+				},
+			},
+			expEventIndices: []int{0, 1, 2},
+		},
+		{
+			note: "nested queries",
+			events: []*topdown.Event{
+				{ // 0
+					Op:      topdown.EvalOp,
+					QueryID: 1,
+				},
+				{ // 1
+					Op:      topdown.EvalOp,
+					QueryID: 1,
+				},
+				{ // 2
+					Op:      topdown.EvalOp,
+					QueryID: 2,
+				},
+				{ // 3
+					Op:      topdown.RedoOp,
+					QueryID: 2,
+				},
+				{ // 4
+					Op:      topdown.RedoOp,
+					QueryID: 1,
+				},
+				{ // 5
+					Op:      topdown.RedoOp,
+					QueryID: 1,
+				},
+			},
+			expEventIndices: []int{0, 1, 4, 5},
+		},
+		{
+			note: "multiple nested queries",
+			events: []*topdown.Event{
+				{ // 0
+					Op:      topdown.EvalOp,
+					QueryID: 1,
+				},
+				{ // 1
+					Op:      topdown.EvalOp,
+					QueryID: 1,
+				},
+				{ // 2
+					Op:      topdown.EvalOp,
+					QueryID: 2,
+				},
+				{ // 3
+					Op:      topdown.EvalOp,
+					QueryID: 3,
+				},
+				{ // 4
+					Op:      topdown.RedoOp,
+					QueryID: 3,
+				},
+				{ // 5
+					Op:      topdown.RedoOp,
+					QueryID: 2,
+				},
+				{ // 6
+					Op:      topdown.RedoOp,
+					QueryID: 1,
+				},
+				{ // 7
+					Op:      topdown.RedoOp,
+					QueryID: 1,
+				},
+			},
+			expEventIndices: []int{0, 1, 6, 7},
+		},
+		{
+			note: "sequential queries",
+			events: []*topdown.Event{
+				{ // 0
+					Op:      topdown.EvalOp,
+					QueryID: 1,
+				},
+				{ // 1
+					Op:      topdown.EvalOp,
+					QueryID: 1,
+				},
+				{ // 2
+					Op:      topdown.EvalOp,
+					QueryID: 2,
+				},
+				{ // 3
+					Op:      topdown.RedoOp,
+					QueryID: 2,
+				},
+				{ // 4
+					Op:      topdown.RedoOp,
+					QueryID: 1,
+				},
+				{ // 5
+					Op:      topdown.EvalOp,
+					QueryID: 2,
+				},
+				{ // 6
+					Op:      topdown.EvalOp,
+					QueryID: 1,
+				},
+			},
+			expEventIndices: []int{0, 1, 4, 6},
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.note, func(t *testing.T) {
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+
+			stk := newTestStack(tc.events...)
+			eh := newTestEventHandler()
+			d, _, thr := setupDebuggerSession(ctx, stk, LaunchProperties{}, eh.HandleEvent, nil)
+
+			var stoppedAt []int
+			doneCh := make(chan struct{})
+			defer close(doneCh)
+			go func() {
+				for {
+					fmt.Println("WAITING FOR EVENT")
+					e := eh.NextBlocking()
+					fmt.Printf("EVENT: %v\n", e)
+
+					if e == nil || e.Type == TerminatedEventType {
+						break
+					}
+
+					if e.Type == StoppedEventType {
+						stoppedAt = append(stoppedAt, e.stackIndex)
+					}
+				}
+				fmt.Println("DONE")
+				doneCh <- struct{}{}
+			}()
+
+			go func() {
+				for {
+					if err := d.StepOver(thr.id); err != nil {
+						t.Errorf("Unexpected error stepping over: %v", err)
+						break
+					}
+				}
+			}()
+
+			select {
+			case <-time.After(5 * time.Second):
+				t.Fatal("Timed out waiting for debugger to finish")
+			case <-doneCh:
+			}
+
+			if !reflect.DeepEqual(stoppedAt, tc.expEventIndices) {
+				t.Errorf("Expected to stop at event indices %v, got %v", tc.expEventIndices, stoppedAt)
+			}
+		})
+	}
+}
+
+func TestDebuggerStepOut(t *testing.T) {
+	tests := []struct {
+		note            string
+		events          []*topdown.Event
+		expEventIndices []int
+	}{
+		{
+			note: "single query",
+			events: []*topdown.Event{
+				{ // 0
+					Op:      topdown.EvalOp,
+					QueryID: 1,
+				},
+				{ // 1
+					Op:      topdown.EvalOp,
+					QueryID: 1,
+				},
+				{ // 2
+					Op:      topdown.EvalOp,
+					QueryID: 1,
+				},
+			},
+			// We always expect to stop on the first stack event
+			expEventIndices: []int{0},
+		},
+		{
+			note: "single query to step out of",
+			events: []*topdown.Event{
+				{ // 0
+					Op:      topdown.EvalOp,
+					QueryID: 2,
+				},
+				{ // 1
+					Op:      topdown.EvalOp,
+					QueryID: 2,
+				},
+				{ // 2
+					Op:      topdown.EvalOp,
+					QueryID: 1,
+				},
+				{ // 3
+					Op:      topdown.RedoOp,
+					QueryID: 1,
+				},
+			},
+
+			expEventIndices: []int{0, 2},
+		},
+		{
+			note: "multiple queries to step out of",
+			events: []*topdown.Event{
+				{ // 0
+					Op:      topdown.EvalOp,
+					QueryID: 3,
+				},
+				{ // 1
+					Op:      topdown.EvalOp,
+					QueryID: 3,
+				},
+				{ // 2
+					Op:      topdown.EvalOp,
+					QueryID: 2,
+				},
+				{ // 3
+					Op:      topdown.RedoOp,
+					QueryID: 2,
+				},
+				{ // 4
+					Op:      topdown.RedoOp,
+					QueryID: 1,
+				},
+				{ // 5
+					Op:      topdown.EvalOp,
+					QueryID: 1,
+				},
+			},
+
+			expEventIndices: []int{0, 2, 4},
+		},
+		{
+			note: "step-out also steps-over",
+			events: []*topdown.Event{
+				{ // 0
+					Op:      topdown.EvalOp,
+					QueryID: 3,
+				},
+				// Extra query to step over
+				{ // 1
+					Op:      topdown.EvalOp,
+					QueryID: 4,
+				},
+				{ // 2
+					Op:      topdown.RedoOp,
+					QueryID: 4,
+				},
+				{ // 3
+					Op:      topdown.EvalOp,
+					QueryID: 3,
+				},
+				{ // 4
+					Op:      topdown.EvalOp,
+					QueryID: 2,
+				},
+				{ // 5
+					Op:      topdown.RedoOp,
+					QueryID: 2,
+				},
+			},
+			expEventIndices: []int{0, 4},
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.note, func(t *testing.T) {
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+
+			stk := newTestStack(tc.events...)
+			eh := newTestEventHandler()
+			d, _, thr := setupDebuggerSession(ctx, stk, LaunchProperties{}, eh.HandleEvent, nil)
+
+			var stoppedAt []int
+			doneCh := make(chan struct{})
+			defer close(doneCh)
+			go func() {
+				for {
+					fmt.Println("WAITING FOR EVENT")
+					e := eh.NextBlocking()
+					fmt.Printf("EVENT: %v\n", e)
+
+					if e == nil || e.Type == TerminatedEventType {
+						break
+					}
+
+					if e.Type == StoppedEventType {
+						stoppedAt = append(stoppedAt, e.stackIndex)
+					}
+				}
+				fmt.Println("DONE")
+				doneCh <- struct{}{}
+			}()
+
+			go func() {
+				for {
+					if err := d.StepOut(thr.id); err != nil {
+						t.Errorf("Unexpected error stepping over: %v", err)
+						break
+					}
+				}
+			}()
+
+			select {
 			//case <-time.After(5 * time.Second):
 			//	t.Fatal("Timed out waiting for debugger to finish")
 			case <-doneCh:
@@ -477,10 +821,6 @@ func TestDebuggerStepIn(t *testing.T) {
 		})
 	}
 }
-
-// TODO: Test step-over
-
-// TODO: Test step-out
 
 func setupDebuggerSession(ctx context.Context, stk stack, launchProperties LaunchProperties, eh EventHandler, l logging.Logger) (*Debugger, *session, *thread) {
 	if l == nil {
