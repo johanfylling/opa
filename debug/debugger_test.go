@@ -955,6 +955,327 @@ func TestDebuggerStackTrace(t *testing.T) {
 	}
 }
 
+func TestDebuggerScopeVariables(t *testing.T) {
+	tests := []struct {
+		note      string
+		input     *ast.Term
+		locals    map[ast.Var]ast.Value
+		result    *rego.ResultSet
+		expScopes map[string]scopeInfo
+	}{
+		{
+			note: "no variables",
+		},
+		{
+			note: "input (object)",
+			input: ast.ObjectTerm(
+				ast.Item(ast.StringTerm("x"), ast.NumberTerm("1")),
+				ast.Item(ast.StringTerm("y"), ast.BooleanTerm(true))),
+			expScopes: map[string]scopeInfo{
+				"Input": {
+					name:           "Input",
+					namedVariables: 1,
+					variables: map[string]varInfo{
+						"input": {
+							typ: "object",
+							val: `{"x": 1, "y": true}`,
+							children: map[string]varInfo{
+								`"x"`: {
+									typ: "number",
+									val: "1",
+								},
+								`"y"`: {
+									typ: "bool",
+									val: "true",
+								},
+							},
+						},
+					},
+				},
+			},
+		},
+		{
+			note: "input (array)",
+			input: ast.ArrayTerm(
+				ast.StringTerm("foo"),
+				ast.NumberTerm("1"),
+				ast.BooleanTerm(true)),
+			expScopes: map[string]scopeInfo{
+				"Input": {
+					name:           "Input",
+					namedVariables: 1,
+					variables: map[string]varInfo{
+						"input": {
+							typ: "array",
+							val: `["foo", 1, true]`,
+							children: map[string]varInfo{
+								"0": {
+									typ: "string",
+									val: `"foo"`,
+								},
+								"1": {
+									typ: "number",
+									val: "1",
+								},
+								"2": {
+									typ: "bool",
+									val: "true",
+								},
+							},
+						},
+					},
+				},
+			},
+		},
+		{
+			note: "local vars",
+			locals: map[ast.Var]ast.Value{
+				ast.Var("x"): ast.Number("42"),
+				ast.Var("y"): ast.Boolean(true),
+				ast.Var("z"): ast.String("foo"),
+				ast.Var("obj"): ast.NewObject(
+					ast.Item(ast.StringTerm("a"), ast.NumberTerm("1")),
+					ast.Item(ast.StringTerm("b"), ast.NumberTerm("2"))),
+				ast.Var("arr"): ast.NewArray(ast.NumberTerm("1"), ast.NumberTerm("2"), ast.NumberTerm("3")),
+			},
+			expScopes: map[string]scopeInfo{
+				"Locals": {
+					name:           "Locals",
+					namedVariables: 5,
+					variables: map[string]varInfo{
+						"x": {
+							typ: "number",
+							val: "42",
+						},
+						"y": {
+							typ: "bool",
+							val: "true",
+						},
+						"z": {
+							typ: "string",
+							val: `"foo"`,
+						},
+						"obj": {
+							typ: "object",
+							val: `{"a": 1, "b": 2}`,
+							children: map[string]varInfo{
+								`"a"`: {
+									typ: "number",
+									val: "1",
+								},
+								`"b"`: {
+									typ: "number",
+									val: "2",
+								},
+							},
+						},
+						"arr": {
+							typ: "array",
+							val: "[1, 2, 3]",
+							children: map[string]varInfo{
+								"0": {
+									typ: "number",
+									val: "1",
+								},
+								"1": {
+									typ: "number",
+									val: "2",
+								},
+								"2": {
+									typ: "number",
+									val: "3",
+								},
+							},
+						},
+					},
+				},
+			},
+		},
+		{
+			note: "result",
+			result: &rego.ResultSet{
+				rego.Result{
+					Expressions: []*rego.ExpressionValue{
+						{
+							Value: ast.Boolean(true),
+							Text:  "x = data.test.allow",
+						},
+					},
+					Bindings: map[string]interface{}{
+						"x": ast.Boolean(true),
+					},
+				},
+			},
+			expScopes: map[string]scopeInfo{
+				"Result Set": {
+					name:           "Result Set",
+					namedVariables: 1,
+					variables: map[string]varInfo{
+						"0": {
+							typ: "object",
+							val: `{"bindings": {"x": true}, "expressions": [{"text": "x = data.test.allow", "value": true}]}`,
+							children: map[string]varInfo{
+								`"bindings"`: {
+									typ: "object",
+									val: `{"x": true}`,
+									children: map[string]varInfo{
+										`"x"`: {
+											typ: "bool",
+											val: "true",
+										},
+									},
+								},
+								`"expressions"`: {
+									typ: "array",
+									val: `[{"text": "x = data.test.allow", "value": true}]`,
+									children: map[string]varInfo{
+										"0": {
+											typ: "object",
+											val: `{"text": "x = data.test.allow", "value": true}`,
+											children: map[string]varInfo{
+												`"text"`: {
+													typ: "string",
+													val: `"x = data.test.allow"`,
+												},
+												`"value"`: {
+													typ: "bool",
+													val: "true",
+												},
+											},
+										},
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.note, func(t *testing.T) {
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+
+			locals := ast.NewValueMap()
+			for k, v := range tc.locals {
+				locals.Put(k, v)
+			}
+
+			e := topdown.Event{
+				Op:     topdown.EvalOp,
+				Locals: locals,
+			}
+
+			e.WithInput(tc.input)
+			events := []*topdown.Event{&e}
+
+			stk := newTestStack(events...)
+
+			if tc.result != nil {
+				stk.result = *tc.result
+			}
+
+			stk.Next() // Move forward to the first event
+			eh := newTestEventHandler()
+			d, _, thr := setupDebuggerSession(ctx, stk, LaunchProperties{}, eh.HandleEvent, nil)
+
+			trace, err := d.StackTrace(thr.id)
+			if err != nil {
+				t.Fatalf("Unexpected error: %v", err)
+			}
+			if len(trace) != 1 {
+				t.Fatalf("Expected 1 stack frame, got %d", len(trace))
+			}
+
+			scopes, err := d.Scopes(trace[0].Id)
+			if err != nil {
+				t.Fatalf("Unexpected error: %v", err)
+			}
+
+			if len(scopes) != len(tc.expScopes) {
+				t.Fatalf("Expected %d scopes, got %d", len(tc.expScopes), len(scopes))
+			}
+
+			for i, scope := range scopes {
+				expScope, ok := tc.expScopes[scope.Name]
+				if !ok {
+					t.Errorf("Unexpected scope: %s", scopes[i].Name)
+					continue
+				}
+
+				if scope.Name != expScope.name {
+					t.Errorf("Expected scope name %s, got %s", expScope.name, scope.Name)
+				}
+				if scope.NamedVariables != expScope.namedVariables {
+					t.Errorf("Expected %d named variables, got %d", expScope.namedVariables, scope.NamedVariables)
+				}
+				if scope.VariablesReference == 0 {
+					t.Errorf("Expected non-zero variables reference")
+				}
+
+				vars, err := d.Variables(scope.VariablesReference)
+				if err != nil {
+					t.Fatalf("Unexpected error: %v", err)
+				}
+
+				if len(vars) != expScope.namedVariables {
+					t.Fatalf("Expected nuber of variables to equal named variables for scope (%d), got %d", expScope.namedVariables, len(vars))
+				}
+
+				assertVariables(t, d, vars, expScope.variables)
+			}
+		})
+	}
+}
+
+type varInfo struct {
+	typ      string
+	val      string
+	children map[string]varInfo
+}
+
+type scopeInfo struct {
+	name           string
+	namedVariables int
+	variables      map[string]varInfo
+}
+
+func assertVariables(t *testing.T, d *Debugger, variables []Variable, exp map[string]varInfo) {
+	for _, v := range variables {
+		expVar, ok := exp[v.Name]
+		if !ok {
+			t.Errorf("Unexpected variable: %s", v.Name)
+			continue
+		}
+
+		if v.Type != expVar.typ {
+			t.Errorf("Expected variable type %s, got %s", expVar.typ, v.Type)
+		}
+
+		if v.Value != expVar.val {
+			t.Errorf("Expected variable value %s, got %s", expVar.val, v.Value)
+		}
+
+		if len(expVar.children) != 0 {
+			if v.VariablesReference == 0 {
+				t.Errorf("Expected non-zero variables reference")
+			}
+
+			vars, err := d.Variables(v.VariablesReference)
+			if err != nil {
+				t.Fatalf("Unexpected error: %v", err)
+			}
+			assertVariables(t, d, vars, expVar.children)
+		} else {
+			if v.VariablesReference != 0 {
+				t.Errorf("Expected zero variables reference")
+			}
+		}
+	}
+}
+
 func setupDebuggerSession(ctx context.Context, stk stack, launchProperties LaunchProperties, eh EventHandler, l logging.Logger) (*Debugger, *session, *thread) {
 	if l == nil {
 		l = logging.NewNoOpLogger()
@@ -1027,6 +1348,7 @@ func (teh *testEventHandler) IgnoreAll(ctx context.Context) {
 type testStack struct {
 	events []*topdown.Event
 	index  int
+	result rego.ResultSet
 	closed bool
 }
 
@@ -1064,7 +1386,7 @@ func (ts *testStack) Current() (int, *topdown.Event) {
 }
 
 func (ts *testStack) Event(i int) *topdown.Event {
-	if !ts.closed || i >= 0 && i < len(ts.events) {
+	if i >= 0 && i < len(ts.events) {
 		return ts.events[i]
 	}
 	return nil
@@ -1080,7 +1402,7 @@ func (ts *testStack) Next() (int, *topdown.Event) {
 }
 
 func (ts *testStack) Result() rego.ResultSet {
-	return nil
+	return ts.result
 }
 
 func (ts *testStack) Close() error {

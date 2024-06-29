@@ -258,13 +258,15 @@ func (t *thread) scopes(stackIndex int) []Scope {
 
 	// TODO: Clients are expected to keep track of fetched scopes and variable references (vs-code does),
 	// but it wouldn't hurt to not register the same var-getter callback more than once.
-	localScope := Scope{
-		Name:               "Locals",
-		NamedVariables:     e.Locals.Len(),
-		VariablesReference: t.localVars(e),
-		Location:           e.Location,
+	if e.Locals.Len() > 0 {
+		localScope := Scope{
+			Name:               "Locals",
+			NamedVariables:     e.Locals.Len(),
+			VariablesReference: t.localVars(e),
+			Location:           e.Location,
+		}
+		scopes = append(scopes, localScope)
 	}
-	scopes = append(scopes, localScope)
 
 	if e.Input() != nil {
 		inputScope := Scope{
