@@ -27,9 +27,20 @@ type Debugger struct {
 	session      *session
 	logger       logging.Logger
 	printHook    *printHook
-	varManager   *variableManager
 	eventHandler EventHandler
 }
+
+//type Session interface {
+//	Resume(threadId int) error
+//	StepOver(threadId int) error
+//	StepIn(threadId int) error
+//	StepOut(threadId int) error
+//	Threads() ([]Thread, error)
+//	SetBreakpoints(locations []location.Location) ([]Breakpoint, error)
+//	StackTrace(threadId int) ([]StackFrame, error)
+//	Scopes(frameId int) ([]Scope, error)
+//	Variables(varRef int) ([]Variable, error)
+//}
 
 type printHook struct {
 	prnt.Hook
@@ -49,8 +60,8 @@ type DebuggerOption func(*Debugger)
 func NewDebugger(ctx context.Context, options ...DebuggerOption) *Debugger {
 	d := &Debugger{
 		ctx:          ctx,
-		varManager:   newVariableManager(),
 		eventHandler: newNopEventHandler(),
+		logger:       logging.NewNoOpLogger(),
 	}
 	d.printHook = &printHook{d: d}
 
@@ -96,6 +107,7 @@ func (lp LaunchProperties) String() string {
 	return string(b)
 }
 
+// FIXME: Why did the printhook break?
 func (d *Debugger) LaunchEval(props LaunchProperties) error {
 	if d.session != nil {
 		return fmt.Errorf("debug session already active")
@@ -147,9 +159,10 @@ func (d *Debugger) LaunchEval(props LaunchProperties) error {
 		rego.EvalQueryTracer(tracer),
 	}
 
+	varManager := newVariableManager()
 	// Threads are 1-indexed.
-	t := newThread(1, "main", tracer, d.varManager, d.logger)
-	newSession(d, props, []*thread{t})
+	t := newThread(1, "main", tracer, varManager, d.logger)
+	d.session = newSession(d, varManager, props, []*thread{t})
 
 	go func() {
 		defer func() { _ = tracer.Close() }()
@@ -199,12 +212,14 @@ type session struct {
 	breakpoints    *breakpointCollection
 	ctx            context.Context
 	cancel         context.CancelFunc
+	varManager     *variableManager
 }
 
-func newSession(debugger *Debugger, props LaunchProperties, threads []*thread) *session {
+func newSession(debugger *Debugger, varManager *variableManager, props LaunchProperties, threads []*thread) *session {
 	ctx, cancel := context.WithCancel(debugger.ctx)
 	s := &session{
 		d:              debugger,
+		varManager:     varManager,
 		properties:     props,
 		threads:        threads,
 		frames:         []*frameInfo{},
@@ -221,6 +236,11 @@ func newSession(debugger *Debugger, props LaunchProperties, threads []*thread) *
 
 	return s
 }
+
+//func (s *session) Start() error {
+//	s.start(s.ctx)
+//	return nil
+//}
 
 func (s *session) start(ctx context.Context) {
 	for _, t := range s.threads {
@@ -273,6 +293,19 @@ func (d *Debugger) Resume(threadId int) error {
 	}
 
 	return t.resume()
+}
+
+func (d *Debugger) ResumeAll() error {
+	if d == nil || d.session == nil {
+		return fmt.Errorf("no active debug session")
+	}
+
+	for _, t := range d.session.threads {
+		if err := t.resume(); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (d *Debugger) StepOver(threadId int) error {
@@ -420,7 +453,7 @@ func (s *session) handleEvent(t *thread, stackIndex int, e *topdown.Event, ts th
 
 	if e == nil {
 		handleEnd := func() (eventAction, threadState, error) {
-			t.stop()
+			t.close()
 			return stopAction, state, nil
 		}
 
@@ -589,7 +622,7 @@ func (d *Debugger) Variables(varRef int) ([]Variable, error) {
 
 	d.logger.Debug("Variables requested: %d", varRef)
 
-	vars, err := d.varManager.vars(varRef)
+	vars, err := d.session.varManager.vars(varRef)
 	if err != nil {
 		return nil, err
 	}
@@ -634,7 +667,7 @@ func (s *session) terminate() error {
 
 	var hasErrors bool
 	for _, t := range s.threads {
-		if err := t.stop(); err != nil {
+		if err := t.close(); err != nil {
 			hasErrors = true
 			s.d.logger.Error("Failed to stop thread %d: %v", t.id, err)
 		} else {

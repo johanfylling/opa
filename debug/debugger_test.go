@@ -20,6 +20,74 @@ import (
 	"github.com/open-policy-agent/opa/util/test"
 )
 
+func TestDebuggerLaunchEval(t *testing.T) {
+	ctx, cancel := context.WithDeadline(context.Background(), time.Now().Add(10*time.Second))
+	defer cancel()
+
+	files := map[string]string{
+		"test1.rego": `package test
+import rego.v1
+import data.util
+
+p if {
+	print("hello")
+	x := util.f(1, 2)
+	y := util.f(3, 4)
+	x < y
+	data.foo != input.foo
+	print("bye")
+}
+`,
+		"test2.rego": `package util
+import rego.v1
+
+f(a, b) := c if {
+	x := a + b
+	c := x * 2
+}
+`,
+		"data.json": `{"foo": "bar"}`,
+	}
+
+	input := `{"foo": "baz"}`
+
+	test.WithTempFS(files, func(rootDir string) {
+		eh := newTestEventHandler()
+		d := NewDebugger(ctx, SetEventHandler(eh.HandleEvent))
+
+		launchProps := LaunchProperties{
+			BundlePaths: []string{rootDir},
+			Input:       input,
+			Query:       "x = data.test.p",
+		}
+
+		err := d.LaunchEval(launchProps)
+		if err != nil {
+			t.Fatalf("Unexpected error: %v", err)
+		}
+
+		if _, err := d.SetBreakpoints([]location.Location{{File: "test1.rego", Row: 7}}); err != nil {
+			t.Fatalf("Unexpected error: %v", err)
+		}
+
+		threads, err := d.Threads()
+		if err != nil {
+			t.Fatalf("Unexpected error: %v", err)
+		}
+		if len(threads) != 1 {
+			t.Fatalf("Expected 1 thread, got %d", len(threads))
+		}
+
+		if err := d.ResumeAll(); err != nil {
+			t.Fatalf("Unexpected error: %v", err)
+		}
+
+		eh.WaitFor(ctx, StoppedEventType)
+
+		t.Fatal("TODO")
+	})
+}
+
 func TestDebuggerAutomaticStop(t *testing.T) {
 	tests := []struct {
 		note          string
@@ -114,8 +182,11 @@ func TestDebuggerAutomaticStop(t *testing.T) {
 			eh := newTestEventHandler()
 			l := logging.New()
 			l.SetLevel(logging.Debug)
-			_, s, _ := setupDebuggerSession(ctx, stk, tc.props, eh.HandleEvent, l)
+			d, s, _ := setupDebuggerSession(ctx, stk, tc.props, eh.HandleEvent, l)
 			s.start(ctx)
+			if err := d.ResumeAll(); err != nil {
+				t.Fatalf("Unexpected error: %v", err)
+			}
 
 			test.EventuallyOrFatal(t, 5*time.Second, func() bool {
 				e := eh.Next(10 * time.Millisecond)
@@ -308,6 +379,9 @@ func TestDebuggerStopOnBreakpoint(t *testing.T) {
 			}
 
 			s.start(ctx)
+			if err := d.ResumeAll(); err != nil {
+				t.Fatalf("Unexpected error: %v", err)
+			}
 
 			var stoppedAt []int
 			test.EventuallyOrFatal(t, 5*time.Second, func() bool {
@@ -935,6 +1009,9 @@ func TestDebuggerStackTrace(t *testing.T) {
 			d, s, thr := setupDebuggerSession(ctx, stk, LaunchProperties{}, eh.HandleEvent, l)
 
 			s.start(ctx)
+			if err := d.ResumeAll(); err != nil {
+				t.Fatalf("Unexpected error: %v", err)
+			}
 
 			if e := eh.WaitFor(ctx, TerminatedEventType); e == nil {
 				t.Fatal("Run never terminated")
@@ -1305,9 +1382,10 @@ func setupDebuggerSession(ctx context.Context, stk stack, launchProperties Launc
 		opts = append(opts, SetEventHandler(eh))
 	}
 
+	varManager := newVariableManager()
 	d := NewDebugger(ctx, opts...)
-	t := newThread(1, "test", stk, d.varManager, l)
-	s := newSession(d, launchProperties, []*thread{t})
+	t := newThread(1, "test", stk, varManager, l)
+	s := newSession(d, varManager, launchProperties, []*thread{t})
 
 	return d, s, t
 }

@@ -54,13 +54,18 @@ func (t *thread) Name() string {
 }
 
 func newThread(id int, name string, stack stack, varManager *variableManager, logger logging.Logger) *thread {
-	return &thread{
+	t := &thread{
 		id:         id,
 		name:       name,
 		stack:      stack,
 		logger:     logger,
 		varManager: varManager,
 	}
+
+	// Threads are always created in a paused state.
+	_ = t.pause()
+
+	return t
 }
 
 func (t *thread) run(ctx context.Context) error {
@@ -97,6 +102,12 @@ func (t *thread) run(ctx context.Context) error {
 			t.breakpointLatch.unblock()
 		}
 	}
+}
+
+func (t *thread) pause() error {
+	t.logger.Debug("Pausing thread: %d", t.id)
+	t.breakpointLatch.block()
+	return nil
 }
 
 func (t *thread) resume() error {
@@ -365,7 +376,7 @@ func (t *thread) resultVars(rs rego.ResultSet) int {
 	})
 }
 
-func (t *thread) stop() error {
+func (t *thread) close() error {
 	t.stopped = true
 	t.breakpointLatch.Close()
 	return t.stack.Close()
