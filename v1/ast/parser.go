@@ -555,18 +555,7 @@ func (p *Parser) parsePackage() *Package {
 		return nil
 	}
 
-	// This allows keywords in the first var term of the ref; should we support this, or only on subsequent terms?
-	p.scanWS()
-
-	if p.s.tok == tokens.Dot || p.s.tok == tokens.LBrack {
-		// This is a ref
-		return nil
-	}
-
-	if p.s.tok == tokens.Whitespace {
-		p.scan()
-	}
-
+	p.scan()
 	if p.s.tok != tokens.Ident {
 		p.illegalToken()
 		return nil
@@ -624,18 +613,7 @@ func (p *Parser) parseImport() *Import {
 		return nil
 	}
 
-	// This allows keywords in the first var term of the ref; should we support this, or only on subsequent terms?
-	p.scanWS()
-
-	if p.s.tok == tokens.Dot || p.s.tok == tokens.LBrack {
-		// This is a ref
-		return nil
-	}
-
-	if p.s.tok == tokens.Whitespace {
-		p.scan()
-	}
-
+	p.scan()
 	if p.s.tok != tokens.Ident {
 		p.error(p.s.Loc(), "expected ident")
 		return nil
@@ -1755,7 +1733,10 @@ func (p *Parser) parseRef(head *Term, offset int) (term *Term) {
 		switch p.s.tok {
 		case tokens.Dot:
 			p.scanWS()
-			if p.s.tok != tokens.Ident && !IsKeywordInRegoVersion(p.s.tok.String(), p.po.EffectiveRegoVersion()) {
+			if p.s.tok != tokens.Ident {
+				if IsKeywordInRegoVersion(p.s.tok.String(), p.po.EffectiveRegoVersion()) {
+					p.hint(`did you mean %s["%s"]?`, RefTerm(ref...), p.s.lit)
+				}
 				p.illegal("expected %v", tokens.Ident)
 				return nil
 			}

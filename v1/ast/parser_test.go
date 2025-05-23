@@ -209,7 +209,7 @@ func TestRefTermsContainingKeywords(t *testing.T) {
 		popts := ParserOptions{RegoVersion: regoVersion}
 
 		t.Run(regoVersion.String(), func(t *testing.T) {
-			for _, kw := range Keywords {
+			for _, kw := range KeywordsForRegoVersion(regoVersion) {
 				input := fmt.Sprintf("input.%s", kw)
 				exp := RefTerm(VarTerm("input"), StringTerm(kw))
 				assertParseOneTerm(t, input, input, exp, popts)
@@ -234,22 +234,22 @@ func TestRefTermsContainingKeywords(t *testing.T) {
 				exp = RefTerm(VarTerm("data"), StringTerm("foo"), StringTerm(kw))
 				assertParseOneTerm(t, input, input, exp, popts)
 
-				input = fmt.Sprintf("%s.foo", kw)
-				exp = RefTerm(VarTerm(kw), StringTerm("foo"))
-				assertParseOneTerm(t, input, input, exp, popts)
-
-				input = fmt.Sprintf(`%s["foo"]`, kw)
-				exp = RefTerm(VarTerm(kw), StringTerm("foo"))
-				assertParseOneTerm(t, input, input, exp, popts)
+				//input = fmt.Sprintf("%s.foo", kw)
+				//exp = RefTerm(VarTerm(kw), StringTerm("foo"))
+				//assertParseOneTerm(t, input, input, exp, popts)
+				//
+				//input = fmt.Sprintf(`%s["foo"]`, kw)
+				//exp = RefTerm(VarTerm(kw), StringTerm("foo"))
+				//assertParseOneTerm(t, input, input, exp, popts)
 			}
 
 			b := strings.Builder{}
-			b.WriteString(Keywords[0])
+			b.WriteString("x")
 
 			exp := make([]*Term, 0, len(Keywords))
-			exp = append(exp, VarTerm(Keywords[0]))
+			exp = append(exp, VarTerm("x"))
 
-			for _, kw := range Keywords[1:] {
+			for _, kw := range Keywords {
 				b.WriteString(".")
 				b.WriteString(kw)
 				exp = append(exp, StringTerm(kw))
