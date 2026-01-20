@@ -4908,6 +4908,44 @@ func TestTopDownPartialEval(t *testing.T) {
 			wantQueries: []string{"not input.x = 7"},
 		},
 
+		// string-interpolation
+		{
+			note:  "template-string, no unknowns, primitive expressions",
+			query: "data.test.p = input",
+			modules: []string{`
+				package test
+				p := $"{"foo"} {42} {false} {null}"
+			`},
+			wantQueries: []string{`"foo 42 false null" = input`},
+		},
+		{
+			note:  "template-string, no unknowns, dynamic expressions",
+			query: "data.test.p = input",
+			modules: []string{`
+				package test
+				p := $"{x} {y} {f(41)}" if {
+					y := "bar"
+				}
+				x := "foo"
+				f(x) := x + 1
+			`},
+			wantQueries: []string{`"foo bar 42" = input`},
+		},
+		{
+			note:  "template-string, unknowns, dynamic expressions",
+			query: "data.test.p = x",
+			modules: []string{`
+				package test
+				p := $"{x} {input.x} {f(input.y)}" if {
+					y := "bar"
+				}
+				x := input.y
+				f(x) := x + 1
+			`},
+			wantQueries: []string{`"foo bar 42" = input`},
+			shallow:     true,
+		},
+
 		{ // Regression test for https://github.com/open-policy-agent/opa/issues/1418
 			note:  "regression, good",
 			query: "data.x.p_good",
