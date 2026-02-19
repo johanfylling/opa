@@ -15,6 +15,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/google/go-cmp/cmp"
 	"github.com/open-policy-agent/opa/v1/ast"
 	"github.com/open-policy-agent/opa/v1/storage"
 	inmem "github.com/open-policy-agent/opa/v1/storage/inmem/test"
@@ -4932,17 +4933,52 @@ func TestTopDownPartialEval(t *testing.T) {
 			wantQueries: []string{`"foo bar 42" = input`},
 		},
 		{
-			note:  "template-string, unknowns, dynamic expressions",
+			note:  "template-string, unknowns, dynamic expressions, no target var",
+			query: "data.test.p",
+			modules: []string{`
+				package test
+				p := $"{42} {x} {input.y} {f(input.z)}" if {
+					x := input.x
+				}
+				f(x) := x + 1
+			`},
+			wantQueries: []string{"$`{42} {input.x} {input.y} {data.test.f(input.z)}`"},
+		},
+		//{
+		//	note:  "template-string, unknowns, dynamic expressions, no target var",
+		//	query: "data.test.p",
+		//	modules: []string{`
+		//		package test
+		//		p := $"{42} {x} {input.y} {f(input.z)}" if {
+		//			x := input.x
+		//		}
+		//		f(x) := x + 1
+		//	`},
+		//	wantQueries: []string{`$"{42} {input.x} {input.y} {f(input.z)}" = input`},
+		//},
+		{
+			note:  "template-string, unknowns, dynamic expressions, target var",
+			query: "data.test.p = v",
+			modules: []string{`
+				package test
+				p := $"{42} {x} {input.y} {f(input.z)}" if {
+					x := input.x
+				}
+				f(x) := x + 1
+			`},
+			wantQueries: []string{`v = $"{42} {input.x} {input.y} {data.test.f(input.z)}"`},
+		},
+		{
+			note:  "template-string, unknowns, dynamic expressions, shallow",
 			query: "data.test.p = x",
 			modules: []string{`
 				package test
-				p := $"{x} {input.x} {f(input.y)}" if {
-					y := "bar"
+				p := $"{42} {x} {input.y} {f(input.z)}" if {
+					x := input.x
 				}
-				x := input.y
 				f(x) := x + 1
 			`},
-			wantQueries: []string{`"foo bar 42" = input`},
+			wantQueries: []string{`{42} {x} {input.y} {f(input.z)}" = input`},
 			shallow:     true,
 		},
 
@@ -5055,6 +5091,7 @@ q if { input.x = 7 }`},
 			}
 
 			queriesA, queriesB := bodySet(partials), bodySet(expectedQueries)
+			t.Log(cmp.Diff(queriesA, queriesB))
 			if !queriesB.Equal(queriesA, tc.ignoreOrder) {
 				missing := queriesB.Diff(queriesA, tc.ignoreOrder)
 				extra := queriesA.Diff(queriesB, tc.ignoreOrder)

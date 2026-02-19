@@ -12,6 +12,7 @@ var (
 	refTypeVisitor  = newTypeVisitor[Ref]()
 	bodyTypeVisitor = newTypeVisitor[Body]()
 	withTypeVisitor = newTypeVisitor[*With]()
+	callTypeVisitor = newTypeVisitor[Call]()
 )
 
 type (
@@ -242,6 +243,10 @@ func WalkClosures(x any, f func(any) bool) {
 		return false
 	})
 	vis.Walk(x)
+}
+
+func WalkCalls(x any, f func(Call) bool) {
+	callTypeVisitor.walk(x, f)
 }
 
 // WalkRefs calls the function f on all references under x. If the function f
