@@ -1688,6 +1688,209 @@ func TestFmtVarTerm(t *testing.T) {
 	}
 }
 
+func TestDeeplyNestedAST(t *testing.T) {
+	tests := []struct {
+		note          string
+		query         string
+		module        string
+		modifiedRules map[string]func(*ast.Rule) *ast.Rule
+		exp           string
+	}{
+		{
+			note:  "not, function call",
+			query: "x = data.test.p",
+			module: `package test
+				p if not f(false)
+				f(x) := x`,
+			exp: `[{"x": true}]`,
+		},
+		{
+			note:  "not, function call with var",
+			query: "x = data.test.p",
+			module: `package test
+				a := false
+				p if not f(a)
+				f(x) := x`,
+			exp: `[{"x": true}]`,
+		},
+		{
+			note:  "not, function call with var, deeply nested",
+			query: "x = data.test.p",
+			module: `package test
+				a := false
+				p if not f(a)
+				f(x) := x`,
+			modifiedRules: map[string]func(*ast.Rule) *ast.Rule{
+				"p": func(r *ast.Rule) *ast.Rule {
+					fmt.Printf("unmodified rule: %v\n", r)
+					fmt.Println(ast.BodyMermaid(r.Body))
+					r.Body = ast.Body{
+						&ast.Expr{
+							Terms: []*ast.Term{
+								ast.RefTerm(ast.VarTerm("data"), ast.StringTerm("test"), ast.StringTerm("f")),
+								ast.RefTerm(ast.VarTerm("data"), ast.StringTerm("test"), ast.StringTerm("a")),
+							},
+							Negated: true,
+						},
+					}
+					fmt.Printf("modified rule: %v\n", r)
+					fmt.Println(ast.BodyMermaid(r.Body))
+					return r
+				},
+			},
+			exp: `[{"x": true}]`,
+		},
+		// Other function call as arg
+		// Eval fails unification (call not supported): v1/topdown/eval.go:1062
+		{
+			note:  "not, nested function calls",
+			query: "x = data.test.p",
+			module: `package test
+				p if not f(f2(1)) == 42
+				f(x) := x + 1
+				f2(x) := x + 2`,
+			modifiedRules: map[string]func(*ast.Rule) *ast.Rule{
+				"p": func(r *ast.Rule) *ast.Rule {
+					fmt.Printf("unmodified rule: %v\n", r)
+					fmt.Println(ast.BodyMermaid(r.Body))
+					r.Body = ast.Body{
+						&ast.Expr{
+							Terms: []*ast.Term{
+								ast.RefTerm(ast.VarTerm("eq")),
+								ast.CallTerm(
+									ast.RefTerm(ast.VarTerm("data"), ast.StringTerm("test"), ast.StringTerm("f")),
+									ast.CallTerm(
+										ast.RefTerm(ast.VarTerm("data"), ast.StringTerm("test"), ast.StringTerm("f2")),
+										ast.NumberTerm("1"),
+									),
+								),
+								ast.NumberTerm("42"),
+							},
+							Negated: true,
+						},
+					}
+					fmt.Printf("modified rule: %v\n", r)
+					fmt.Println(ast.BodyMermaid(r.Body))
+					return r
+				},
+			},
+			exp: `[{"x": true}]`,
+		},
+		{
+			note:  "nested function calls",
+			query: "x = data.test.p",
+			module: `package test
+				p := f(f2(1))
+				f(x) := x + 1
+				f2(x) := x + 2`,
+			modifiedRules: map[string]func(*ast.Rule) *ast.Rule{
+				"p": func(r *ast.Rule) *ast.Rule {
+					fmt.Printf("unmodified rule: %v\n", r)
+					fmt.Println(ast.BodyMermaid(r.Body))
+					r.Body = ast.Body{
+						&ast.Expr{
+							Terms: []*ast.Term{
+								ast.RefTerm(ast.VarTerm("data"), ast.StringTerm("test"), ast.StringTerm("f")),
+								ast.CallTerm(
+									ast.RefTerm(ast.VarTerm("data"), ast.StringTerm("test"), ast.StringTerm("f2")),
+									ast.NumberTerm("1"),
+								),
+								r.Head.Value,
+							},
+						},
+					}
+					fmt.Printf("modified rule: %v\n", r)
+					fmt.Println(ast.BodyMermaid(r.Body))
+					return r
+				},
+			},
+			exp: `[{"x": 4}]`,
+		},
+		// TODO: Add testcase with comprehension as arg
+	}
+
+	ctx := t.Context()
+	store := inmem.New()
+
+	for _, tc := range tests {
+		t.Run(tc.note, func(t *testing.T) {
+			compiler := compileModules([]string{tc.module})
+
+			txn := storage.NewTransactionOrDie(ctx, store)
+			defer store.Abort(ctx, txn)
+			m := metrics.New()
+
+			// Evaluate both unmodified and modified rules
+
+			// Unmodified AST
+
+			buf := NewBufferTracer()
+			unmodifiedQuery := NewQuery(ast.MustParseBody(tc.query)).
+				WithCompiler(compiler).
+				WithStore(store).
+				WithTransaction(txn).
+				WithInstrumentation(NewInstrumentation(m)).
+				WithQueryTracer(buf)
+
+			qrs, err := unmodifiedQuery.Run(ctx)
+			if err != nil {
+				t.Fatalf("Unexpected error: %v", err)
+			}
+
+			fmt.Fprintln(t.Output(), "Unmodified AST:")
+			PrettyTrace(t.Output(), *buf)
+
+			if exp, act := 1, len(qrs); exp != act {
+				t.Fatalf("expected %d query result, got %d query results: %+v", exp, act, qrs)
+			}
+
+			// TODO: Print trace
+
+			var exp []map[string]any
+			if err := json.Unmarshal([]byte(tc.exp), &exp); err != nil {
+				t.Fatal("Failed to unmarshal exp")
+			}
+			if expLen, act := len(exp), len(qrs); expLen != act {
+				t.Fatalf("expected %d query result:\n\n%+v,\n\ngot %d query results:\n\n%+v", expLen, exp, act, qrs)
+			}
+			testAssertResultSet(t, exp, qrs, false, false)
+
+			// Modified AST
+
+			buf = NewBufferTracer()
+			modifiedQuery := NewQuery(ast.MustParseBody(tc.query)).
+				WithCompiler(compiler).
+				WithStore(store).
+				WithTransaction(txn).
+				WithInstrumentation(NewInstrumentation(m)).
+				WithQueryTracer(buf)
+
+			for ref, f := range tc.modifiedRules {
+				for _, m := range compiler.Modules {
+					for i, or := range m.Rules {
+						if or.Head.Ref().String() == ref {
+							m.Rules[i] = f(or)
+						}
+					}
+				}
+			}
+
+			qrs, err = modifiedQuery.Run(ctx)
+			if err != nil {
+				t.Fatalf("Unexpected error: %v", err)
+			}
+
+			fmt.Fprintln(t.Output(), "Modified AST:")
+			PrettyTrace(t.Output(), *buf)
+
+			if exp, act := 1, len(qrs); exp != act {
+				t.Fatalf("expected %d query result, got %d query results: %+v", exp, act, qrs)
+			}
+			testAssertResultSet(t, exp, qrs, false, false)
+		})
+	}
+}
+
 // Comparison with fmt.Sprintf:
 // fmt.sprintf        8093799   159.41 ns/op      56 B/op       4 allocs/op
 // formatVarTerm     20424126    50.95 ns/op      24 B/op       1 allocs/op
