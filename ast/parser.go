@@ -27,6 +27,8 @@ const (
 	// 'if' and 'contains' required in rule heads;
 	// (some) strict checks on by default.
 	RegoV1 = v1.RegoV1
+	// RegoV2 is the Rego syntax to be enforced by a future OPA 2.0 release.
+	RegoV2 = v1.RegoV2 // FIXME: Should we NOT include this in the old API?
 )
 
 func RegoVersionFromInt(i int) RegoVersion {

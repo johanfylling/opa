@@ -57,6 +57,7 @@ const FeatureRefHeadStringPrefixes = "rule_head_ref_string_prefixes"
 const FeatureRefHeads = "rule_head_refs"
 const FeatureRegoV1 = "rego_v1"
 const FeatureRegoV1Import = "rego_v1_import"
+const FeatureRegoV2Import = "rego_v2_import"
 const FeatureKeywordsInRefs = "keywords_in_refs"
 const FeatureTemplateStrings = "template_strings"
 

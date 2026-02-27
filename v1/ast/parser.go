@@ -38,6 +38,7 @@ const DefaultMaxParsingRecursionDepth = 100000
 var ErrMaxParsingRecursionDepthExceeded = errors.New("max parsing recursion depth exceeded")
 
 var RegoV1CompatibleRef = Ref{VarTerm("rego"), InternedTerm("v1")}
+var RegoV2CompatibleRef = Ref{VarTerm("rego"), InternedTerm("v2")}
 
 // RegoVersion defines the Rego syntax requirements for a module.
 type RegoVersion int
@@ -56,6 +57,8 @@ const (
 	// 'if' and 'contains' required in rule heads;
 	// (some) strict checks on by default.
 	RegoV1
+	// RegoV2 is the Rego syntax to be enforced by a future OPA 2.0 release.
+	RegoV2
 )
 
 var (
@@ -78,10 +81,14 @@ var (
 )
 
 func (v RegoVersion) Int() int {
-	if v == RegoV1 {
+	switch v {
+	case RegoV1:
 		return 1
+	case RegoV2:
+		return 2
+	default:
+		return 0
 	}
-	return 0
 }
 
 func (v RegoVersion) String() string {
@@ -90,6 +97,8 @@ func (v RegoVersion) String() string {
 		return "v0"
 	case RegoV1:
 		return "v1"
+	case RegoV2:
+		return "v2"
 	case RegoV0CompatV1:
 		return "v0v1"
 	default:
@@ -98,10 +107,14 @@ func (v RegoVersion) String() string {
 }
 
 func RegoVersionFromInt(i int) RegoVersion {
-	if i == 1 {
+	switch i {
+	case 1:
 		return RegoV1
+	case 2:
+		return RegoV2
+	default:
+		return RegoV0
 	}
-	return RegoV0
 }
 
 // Note: This state is kept isolated from the parser so that we
@@ -485,7 +498,7 @@ func (p *Parser) Parse() ([]Statement, []*Comment, Errors) {
 
 		if imp := p.parseImport(); imp != nil {
 			if RegoRootDocument.Equal(imp.Path.Value.(Ref)[0]) {
-				p.regoV1Import(imp)
+				p.regoVersionImport(imp)
 			}
 
 			if FutureRootDocument.Equal(imp.Path.Value.(Ref)[0]) {
@@ -3174,22 +3187,32 @@ func (p *Parser) futureImport(imp *Import, allowedFutureKeywords map[string]toke
 	}
 }
 
-func (p *Parser) regoV1Import(imp *Import) {
-	if !p.po.Capabilities.ContainsFeature(FeatureRegoV1Import) && !p.po.Capabilities.ContainsFeature(FeatureRegoV1) {
-		p.errorf(imp.Path.Location, "invalid import, `%s` is not supported by current capabilities", RegoV1CompatibleRef)
+func (p *Parser) regoVersionImport(imp *Import) {
+	if !p.po.Capabilities.ContainsFeature(FeatureRegoV1Import) &&
+		!p.po.Capabilities.ContainsFeature(FeatureRegoV1) &&
+		!p.po.Capabilities.ContainsFeature(FeatureRegoV2Import) {
+		p.errorf(imp.Path.Location, "invalid import, `%s` is not supported by current capabilities", imp.Path.String())
 		return
 	}
 
 	path := imp.Path.Value.(Ref)
 
-	// v1 is only valid option
-	if len(path) == 1 || !path[1].Equal(RegoV1CompatibleRef[1]) || len(path) > 2 {
-		p.errorf(imp.Path.Location, "invalid import `%s`, must be `%s`", path, RegoV1CompatibleRef)
-		return
+	var regoVersion RegoVersion
+
+	if RegoV1CompatibleRef.Equal(path) {
+		regoVersion = RegoV1
+	} else if RegoV2CompatibleRef.Equal(path) {
+		regoVersion = RegoV2
 	}
 
-	if p.po.EffectiveRegoVersion() == RegoV1 {
-		// We're parsing for Rego v1, where the 'rego.v1' import is a no-op.
+	switch regoVersion {
+	case RegoV1:
+		p.s.s.SetRegoV1Compatible()
+	case RegoV2:
+		p.s.s.SetRegoV2Compatible()
+	default:
+		// v1 and v2 are the only valid options
+		p.errorf(imp.Path.Location, "invalid import `%s`, must be one of: `%s`, `%s`", path, RegoV1CompatibleRef, RegoV2CompatibleRef)
 		return
 	}
 
@@ -3198,10 +3221,13 @@ func (p *Parser) regoV1Import(imp *Import) {
 		return
 	}
 
-	// import all future keywords with the rego.v1 import
-	kwds := util.Keys(futureKeywordsV0)
+	if p.po.EffectiveRegoVersion() == regoVersion {
+		// E.g. we're parsing for Rego v1, where the 'rego.v1' import is a no-op.
+		return
+	}
 
-	p.s.s.SetRegoV1Compatible()
+	// import all future keywords with the rego.v1/v2 imports
+	kwds := util.Keys(futureKeywordsV0)
 	for _, kw := range kwds {
 		p.s.s.AddKeyword(kw, futureKeywordsV0[kw])
 	}

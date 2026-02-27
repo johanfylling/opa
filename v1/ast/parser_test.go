@@ -3005,10 +3005,10 @@ func TestRegoV1Import(t *testing.T) {
 	// These tests assert that the 'rego.v1' import is correctly handled in v0.
 	popts := ParserOptions{RegoVersion: RegoV0}
 
-	assertParseErrorContains(t, "rego", "import rego", "invalid import `rego`, must be `rego.v1`", popts)
-	assertParseErrorContains(t, "rego.foo", "import rego.foo", "invalid import `rego.foo`, must be `rego.v1`", popts)
-	assertParseErrorContains(t, "rego.foo.bar", "import rego.foo.bar", "invalid import `rego.foo.bar`, must be `rego.v1`", popts)
-	assertParseErrorContains(t, "rego.v1.bar", "import rego.v1.bar", "invalid import `rego.v1.bar`, must be `rego.v1`", popts)
+	assertParseErrorContains(t, "rego", "import rego", "invalid import `rego`, must be one of: `rego.v1`, `rego.v2`", popts)
+	assertParseErrorContains(t, "rego.foo", "import rego.foo", "invalid import `rego.foo`, must be one of: `rego.v1`, `rego.v2", popts)
+	assertParseErrorContains(t, "rego.foo.bar", "import rego.foo.bar", "invalid import `rego.foo.bar`, must be one of: `rego.v1`, `rego.v2", popts)
+	assertParseErrorContains(t, "rego.v1.bar", "import rego.v1.bar", "invalid import `rego.v1.bar`, must be one of: `rego.v1`, `rego.v2", popts)
 	assertParseErrorContains(t, "rego.v1 + alias", "import rego.v1 as xyz", "`rego` imports cannot be aliased", popts)
 
 	assertParseImport(t, "import rego.v1",
@@ -3581,6 +3581,87 @@ f(x) if {
 				if !strings.Contains(actual, expected) {
 					t.Errorf("expected error:\n\n%q\n\ngot:\n\n%v", expected, actual)
 				}
+			}
+		})
+	}
+}
+
+func TestRegoV2Import(t *testing.T) {
+	tests := []struct {
+		note           string
+		module         string
+		expectedErrors []string
+	}{
+		{
+			note: "rego.v2 imported",
+			module: `package test
+				import rego.v2`,
+		},
+		{
+			note: "multiple rego.v2 imported",
+			module: `package test
+				import rego.v2
+				import rego.v2`,
+		},
+		{
+			note: "rego.v1 AND rego.v2 imported",
+			module: `package test
+				import rego.v1
+				import rego.v2`,
+			expectedErrors: []string{
+				"2:5: rego_parse_error: multiple Rego versions imported",
+				"3:5: rego_parse_error: multiple Rego versions imported",
+			},
+		},
+		{
+			note: "rego.v1 AND rego.v2 imported (rev)",
+			module: `package test
+				import rego.v2
+				import rego.v1`,
+			expectedErrors: []string{
+				"2:5: rego_parse_error: multiple Rego versions imported",
+				"3:5: rego_parse_error: multiple Rego versions imported",
+			},
+		},
+		{
+			note: "rego.v2 imported with alias",
+			module: `package test
+				import rego.v2 as foo`,
+			expectedErrors: []string{
+				"2:12: rego_parse_error: `rego` imports cannot be aliased",
+			},
+		},
+	}
+
+	for _, baseRegoVersion := range []RegoVersion{RegoV0, RegoV1, RegoV2} {
+		popts := ParserOptions{RegoVersion: baseRegoVersion}
+
+		t.Run(baseRegoVersion.String(), func(t *testing.T) {
+			for _, tc := range tests {
+				t.Run(tc.note, func(t *testing.T) {
+					m, errs := ParseModuleWithOpts("", tc.module, popts)
+
+					if len(tc.expectedErrors) == 0 {
+						if errs != nil {
+							t.Fatalf("expected no errors, got:\n\n%v", errs)
+						}
+
+						if exp, act := RegoV2, m.RegoVersion(); exp != act {
+							t.Fatalf("expected module to be %s, got: %s", exp, act)
+						}
+					}
+
+					actual := ""
+					if errs != nil {
+						actual = errs.Error()
+					}
+
+					for _, expected := range tc.expectedErrors {
+						if !strings.Contains(actual, expected) {
+							t.Errorf("expected error:\n\n%q\n\ngot:\n\n%v", expected, actual)
+						}
+					}
+				})
 			}
 		})
 	}

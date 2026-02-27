@@ -29,6 +29,7 @@ type Scanner struct {
 	width            int
 	curr             rune
 	regoV1Compatible bool
+	regoV2Compatible bool
 }
 
 // Error represents a scanner error.
@@ -126,6 +127,15 @@ func (s *Scanner) SetRegoV1Compatible() {
 }
 
 func (s *Scanner) RegoV1Compatible() bool {
+	return s.regoV1Compatible
+}
+
+func (s *Scanner) SetRegoV2Compatible() {
+	s.regoV1Compatible = true
+	s.regoV2Compatible = true
+}
+
+func (s *Scanner) RegoV2Compatible() bool {
 	return s.regoV1Compatible
 }
 

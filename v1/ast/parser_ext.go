@@ -668,12 +668,15 @@ func parseModule(filename string, stmts []Statement, comments []*Comment, regoCo
 		mod.regoVersion = DefaultRegoVersion
 	}
 
+	var importedRegoVersions []*Import
+
 	for i, stmt := range stmts[1:] {
 		switch stmt := stmt.(type) {
 		case *Import:
 			mod.Imports = append(mod.Imports, stmt)
-			if mod.regoVersion == RegoV0 && RegoV1CompatibleRef.Equal(stmt.Path.Value) {
-				mod.regoVersion = RegoV0CompatV1
+
+			if p, ok := stmt.Path.Value.(Ref); ok && len(p) >= 1 && RegoRootDocument.Equal(p[0]) {
+				importedRegoVersions = append(importedRegoVersions, stmt)
 			}
 		case *Rule:
 			setRuleModule(stmt, mod)
@@ -702,10 +705,36 @@ func parseModule(filename string, stmts []Statement, comments []*Comment, regoCo
 		}
 	}
 
+	importedRegoVersions = slices.CompactFunc(importedRegoVersions, func(v1, v2 *Import) bool {
+		return v1.Equal(v2)
+	})
+
+	if len(importedRegoVersions) == 1 {
+		imp := importedRegoVersions[0]
+		if mod.regoVersion == RegoV0 && RegoV1CompatibleRef.Equal(imp.Path.Value) {
+			mod.regoVersion = RegoV0CompatV1
+		}
+		if RegoV2CompatibleRef.Equal(imp.Path.Value) {
+			mod.regoVersion = RegoV2
+		}
+	} else if len(importedRegoVersions) > 1 {
+		for _, imp := range importedRegoVersions {
+			errs = append(errs, NewError(ParseErr, imp.Loc(), "multiple Rego versions imported"))
+		}
+	}
+
+	var checkRegoVersion func(any) Errors
+
 	if mod.regoVersion == RegoV0CompatV1 || mod.regoVersion == RegoV1 {
+		checkRegoVersion = CheckRegoV1
+	} else if mod.regoVersion == RegoV2 {
+		checkRegoVersion = CheckRegoV2
+	}
+
+	if checkRegoVersion != nil {
 		for _, rule := range mod.Rules {
 			for r := rule; r != nil; r = r.Else {
-				errs = append(errs, CheckRegoV1(r)...)
+				errs = append(errs, checkRegoVersion(r)...)
 			}
 		}
 	}
