@@ -370,8 +370,21 @@ func (p *Parser) Parse() ([]Statement, []*Comment, Errors) {
 
 	allowedFutureKeywords := map[string]tokens.Token{}
 
-	if p.po.EffectiveRegoVersion() == RegoV1 {
-		if !p.po.Capabilities.ContainsFeature(FeatureRegoV1) {
+	regoVersion := p.po.EffectiveRegoVersion()
+
+	switch regoVersion {
+	case RegoV1, RegoV2:
+		if regoVersion == RegoV1 && !p.po.Capabilities.ContainsFeature(FeatureRegoV1) {
+			return nil, nil, Errors{
+				&Error{
+					Code:     ParseErr,
+					Message:  "illegal capabilities: rego_v1 feature required for parsing v1 Rego",
+					Location: nil,
+				},
+			}
+		}
+
+		if regoVersion == RegoV2 && !p.po.Capabilities.ContainsFeature(FeatureRegoV2Import) {
 			return nil, nil, Errors{
 				&Error{
 					Code:     ParseErr,
@@ -413,7 +426,7 @@ func (p *Parser) Parse() ([]Statement, []*Comment, Errors) {
 				}
 			}
 		}
-	} else {
+	default:
 		for _, kw := range p.po.Capabilities.FutureKeywords {
 			var ok bool
 			allowedFutureKeywords[kw], ok = allFutureKeywords[kw]
@@ -447,7 +460,7 @@ func (p *Parser) Parse() ([]Statement, []*Comment, Errors) {
 	}
 
 	selected := map[string]tokens.Token{}
-	if p.po.AllFutureKeywords || p.po.EffectiveRegoVersion() == RegoV1 {
+	if p.po.AllFutureKeywords || p.po.EffectiveRegoVersion() == RegoV1 || p.po.EffectiveRegoVersion() == RegoV2 {
 		maps.Copy(selected, allowedFutureKeywords)
 	} else {
 		for _, kw := range p.po.FutureKeywords {
@@ -3137,7 +3150,7 @@ func IsFutureKeywordForRegoVersion(s string, v RegoVersion) bool {
 	switch v {
 	case RegoV0, RegoV0CompatV1:
 		_, yes = futureKeywordsV0[s]
-	case RegoV1:
+	case RegoV1, RegoV2:
 		_, yes = futureKeywords[s]
 	}
 
