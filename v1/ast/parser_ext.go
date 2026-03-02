@@ -711,9 +711,16 @@ func parseModule(filename string, stmts []Statement, comments []*Comment, regoCo
 
 	if len(importedRegoVersions) == 1 {
 		imp := importedRegoVersions[0]
-		if mod.regoVersion == RegoV0 && RegoV1CompatibleRef.Equal(imp.Path.Value) {
-			mod.regoVersion = RegoV0CompatV1
+
+		if RegoV1CompatibleRef.Equal(imp.Path.Value) {
+			if regoCompatibilityMode == RegoV0 {
+				// If the "default" rego-version is v0 but v1 is imported, we must ensure the module is compatible with both versions.
+				mod.regoVersion = RegoV0CompatV1
+			} else {
+				mod.regoVersion = RegoV1
+			}
 		}
+
 		if RegoV2CompatibleRef.Equal(imp.Path.Value) {
 			mod.regoVersion = RegoV2
 		}

@@ -3221,8 +3221,8 @@ func (p *Parser) regoVersionImport(imp *Import) {
 		return
 	}
 
-	if p.po.EffectiveRegoVersion() == regoVersion {
-		// E.g. we're parsing for Rego v1, where the 'rego.v1' import is a no-op.
+	if p.po.EffectiveRegoVersion() >= RegoV1 {
+		// We're parsing for Rego v1, where the 'rego.v1' import is a no-op.
 		return
 	}
 

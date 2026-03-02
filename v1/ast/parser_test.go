@@ -3667,6 +3667,26 @@ func TestRegoV2Import(t *testing.T) {
 	}
 }
 
+func TestRegoV1ImportOverridesV2ParserOptions(t *testing.T) {
+	// Note: Allowing imports to override default/system parser options allows users to
+	// opt-out of v2 semantics on a per-module basis.
+
+	mod := `package test
+		import rego.v1`
+
+	popts := ParserOptions{RegoVersion: RegoV2}
+
+	m, errs := ParseModuleWithOpts("", mod, popts)
+
+	if errs != nil {
+		t.Fatalf("expected no errors, got:\n\n%v", errs)
+	}
+
+	if exp, act := RegoV1, m.RegoVersion(); exp != act {
+		t.Fatalf("expected module to be %s, got: %s", exp, act)
+	}
+}
+
 func TestIsValidImportPath(t *testing.T) {
 	tests := []struct {
 		path     string
