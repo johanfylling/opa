@@ -359,6 +359,11 @@ func dropCapabilityFeature(caps *Capabilities, feature string) *Capabilities {
 	return caps
 }
 
+func addCapabilityFeature(caps *Capabilities, feature string) *Capabilities {
+	caps.Features = append(caps.Features, feature)
+	return caps
+}
+
 func TestRefTermsContainingKeywords_NoCapability(t *testing.T) {
 	for _, regoVersion := range []RegoVersion{RegoV0, RegoV1} {
 		caps := CapabilitiesForThisVersion(CapabilitiesRegoVersion(regoVersion))
@@ -3587,21 +3592,28 @@ f(x) if {
 }
 
 func TestRegoV2Import(t *testing.T) {
+	addCapsFeature := func(v RegoVersion) *Capabilities {
+		return addCapabilityFeature(CapabilitiesForThisVersion(CapabilitiesRegoVersion(v)), FeatureRegoV2Import)
+	}
+
 	tests := []struct {
 		note           string
 		module         string
+		capabilities   func(RegoVersion) *Capabilities
 		expectedErrors []string
 	}{
 		{
 			note: "rego.v2 imported",
 			module: `package test
 				import rego.v2`,
+			capabilities: addCapsFeature,
 		},
 		{
 			note: "multiple rego.v2 imported",
 			module: `package test
 				import rego.v2
 				import rego.v2`,
+			capabilities: addCapsFeature,
 		},
 		{
 			note: "rego.v1 AND rego.v2 imported",
@@ -3612,6 +3624,7 @@ func TestRegoV2Import(t *testing.T) {
 				"2:5: rego_parse_error: multiple Rego versions imported",
 				"3:5: rego_parse_error: multiple Rego versions imported",
 			},
+			capabilities: addCapsFeature,
 		},
 		{
 			note: "rego.v1 AND rego.v2 imported (rev)",
@@ -3622,6 +3635,7 @@ func TestRegoV2Import(t *testing.T) {
 				"2:5: rego_parse_error: multiple Rego versions imported",
 				"3:5: rego_parse_error: multiple Rego versions imported",
 			},
+			capabilities: addCapsFeature,
 		},
 		{
 			note: "rego.v2 imported with alias",
@@ -3630,15 +3644,31 @@ func TestRegoV2Import(t *testing.T) {
 			expectedErrors: []string{
 				"2:12: rego_parse_error: `rego` imports cannot be aliased",
 			},
+			capabilities: addCapsFeature,
+		},
+		{
+			note: "no capability",
+			module: `package test
+				import rego.v2`,
+			capabilities: func(v RegoVersion) *Capabilities {
+				return dropCapabilityFeature(CapabilitiesForThisVersion(CapabilitiesRegoVersion(v)), FeatureRegoV2Import)
+			},
+			expectedErrors: []string{
+				"2:12: rego_parse_error: invalid import, `rego.v2` is not supported by current capabilities",
+			},
 		},
 	}
 
 	for _, baseRegoVersion := range []RegoVersion{RegoV0, RegoV1, RegoV2} {
-		popts := ParserOptions{RegoVersion: baseRegoVersion}
-
 		t.Run(baseRegoVersion.String(), func(t *testing.T) {
 			for _, tc := range tests {
 				t.Run(tc.note, func(t *testing.T) {
+					popts := ParserOptions{RegoVersion: baseRegoVersion}
+
+					if tc.capabilities != nil {
+						popts.Capabilities = tc.capabilities(baseRegoVersion)
+					}
+
 					m, errs := ParseModuleWithOpts("", tc.module, popts)
 
 					if len(tc.expectedErrors) == 0 {

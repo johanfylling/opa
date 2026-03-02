@@ -3207,8 +3207,17 @@ func (p *Parser) regoVersionImport(imp *Import) {
 
 	switch regoVersion {
 	case RegoV1:
+		if !p.po.Capabilities.ContainsFeature(FeatureRegoV1Import) &&
+			!p.po.Capabilities.ContainsFeature(FeatureRegoV1) {
+			p.errorf(imp.Path.Location, "invalid import, `%s` is not supported by current capabilities", imp.Path.String())
+			return
+		}
 		p.s.s.SetRegoV1Compatible()
 	case RegoV2:
+		if !p.po.Capabilities.ContainsFeature(FeatureRegoV2Import) {
+			p.errorf(imp.Path.Location, "invalid import, `%s` is not supported by current capabilities", imp.Path.String())
+			return
+		}
 		p.s.s.SetRegoV2Compatible()
 	default:
 		// v1 and v2 are the only valid options
