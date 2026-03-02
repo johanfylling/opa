@@ -122,6 +122,33 @@ p    contains    x    if      {
 				"rego_parse_error: var cannot be used for rule name",
 			},
 		},
+		{
+			note:          "v0 -> v2",
+			toRegoVersion: ast.RegoV2,
+			module: `package test
+
+p[x]            {
+	x = "a"
+}`,
+			expFormatted: `package test
+
+p contains x if {
+	x = "a"
+}
+`,
+		},
+		{
+			note:          "v1 -> v2",
+			toRegoVersion: ast.RegoV2,
+			module: `package test
+
+p    contains    x    if      {
+	x = "a"
+}`,
+			expErrs: []string{
+				"rego_parse_error: var cannot be used for rule name",
+			},
+		},
 	}
 
 	for _, tc := range tests {

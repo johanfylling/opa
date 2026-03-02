@@ -94,7 +94,7 @@ func SourceWithOpts(filename string, src []byte, opts Opts) ([]byte, error) {
 		return nil, err
 	}
 
-	if regoVersion == ast.RegoV0CompatV1 || regoVersion == ast.RegoV1 {
+	if regoVersion == ast.RegoV0CompatV1 || regoVersion == ast.RegoV1 || regoVersion == ast.RegoV2 {
 		checkOpts := ast.NewRegoCheckOptions()
 		// The module is parsed as v0, so we need to disable checks that will be automatically amended by the AstWithOpts call anyways.
 		checkOpts.RequireIfKeyword = false
@@ -194,7 +194,7 @@ func AstWithOpts(x any, opts Opts) ([]byte, error) {
 	o := fmtOpts{}
 
 	regoVersion := opts.effectiveRegoVersion()
-	if regoVersion == ast.RegoV0CompatV1 || regoVersion == ast.RegoV1 {
+	if regoVersion == ast.RegoV0CompatV1 || regoVersion == ast.RegoV1 || regoVersion == ast.RegoV2 {
 		o.regoV1 = true
 		o.ifs = true
 		o.contains = true

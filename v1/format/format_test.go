@@ -100,106 +100,64 @@ func TestFormatSourceError(t *testing.T) {
 	}
 }
 
-func TestFormatV0Source(t *testing.T) {
-	regoFiles, err := filepath.Glob("testfiles/v0/*.rego")
-	if err != nil {
-		panic(err)
-	}
-
-	for _, rego := range regoFiles {
-		t.Run(rego, func(t *testing.T) {
-			contents, err := os.ReadFile(rego)
+func TestFormatSource(t *testing.T) {
+	for _, regoVersion := range []ast.RegoVersion{ast.RegoV0, ast.RegoV1, ast.RegoV2} {
+		t.Run(regoVersion.String(), func(t *testing.T) {
+			regoFiles, err := filepath.Glob(fmt.Sprintf("testfiles/%s/*.rego", regoVersion))
 			if err != nil {
-				t.Fatalf("Failed to read rego source: %v", err)
+				panic(err)
 			}
 
-			expected, err := os.ReadFile(rego + ".formatted")
-			if err != nil {
-				t.Fatalf("Failed to read expected rego source: %v", err)
-			}
+			for _, rego := range regoFiles {
+				t.Run(rego, func(t *testing.T) {
+					contents, err := os.ReadFile(rego)
+					if err != nil {
+						t.Fatalf("Failed to read rego source: %v", err)
+					}
 
-			popts := ast.ParserOptions{
-				RegoVersion: ast.RegoV0,
-			}
-			opts := Opts{
-				RegoVersion:   ast.RegoV0,
-				ParserOptions: &popts,
-			}
+					expected, err := os.ReadFile(rego + ".formatted")
+					if err != nil {
+						t.Fatalf("Failed to read expected rego source: %v", err)
+					}
 
-			formatted, err := SourceWithOpts(rego, contents, opts)
-			if err != nil {
-				t.Fatalf("Failed to format file: %v", err)
+					// TODO: Remove once v2 is enabled by default
+					caps := ast.CapabilitiesForThisVersion(ast.CapabilitiesRegoVersion(regoVersion))
+					caps.Features = append(caps.Features, ast.FeatureRegoV2Import)
+
+					popts := ast.ParserOptions{
+						RegoVersion:  regoVersion,
+						Capabilities: caps,
+					}
+					opts := Opts{
+						RegoVersion:   regoVersion,
+						ParserOptions: &popts,
+						Capabilities:  caps,
+					}
+
+					formatted, err := SourceWithOpts(rego, contents, opts)
+					if err != nil {
+						t.Fatalf("Failed to format file: %v", err)
+					}
+
+					if ln, at := differsAt(formatted, expected); ln != 0 {
+						t.Fatalf("Expected formatted bytes to equal expected bytes but differed near line %d / byte %d (got: %q, expected: %q):\n%s", ln, at, formatted[at], expected[at], prefixWithLineNumbers(formatted))
+					}
+
+					if _, err := ast.ParseModuleWithOpts(rego+".tmp", string(formatted), popts); err != nil {
+						t.Fatalf("Failed to parse formatted bytes: %v", err)
+					}
+
+					formatted, err = SourceWithOpts(rego, formatted, opts)
+					if err != nil {
+						t.Fatalf("Failed to double format file")
+					}
+
+					if ln, at := differsAt(formatted, expected); ln != 0 {
+						t.Fatalf("Expected roundtripped bytes to equal expected bytes but differed near line %d / byte %d:\n%s", ln, at, prefixWithLineNumbers(formatted))
+					}
+
+				})
 			}
-
-			if ln, at := differsAt(formatted, expected); ln != 0 {
-				t.Fatalf("Expected formatted bytes to equal expected bytes but differed near line %d / byte %d (got: %q, expected: %q):\n%s", ln, at, formatted[at], expected[at], prefixWithLineNumbers(formatted))
-			}
-
-			if _, err := ast.ParseModuleWithOpts(rego+".tmp", string(formatted), popts); err != nil {
-				t.Fatalf("Failed to parse formatted bytes: %v", err)
-			}
-
-			formatted, err = SourceWithOpts(rego, formatted, opts)
-			if err != nil {
-				t.Fatalf("Failed to double format file")
-			}
-
-			if ln, at := differsAt(formatted, expected); ln != 0 {
-				t.Fatalf("Expected roundtripped bytes to equal expected bytes but differed near line %d / byte %d:\n%s", ln, at, prefixWithLineNumbers(formatted))
-			}
-
-		})
-	}
-}
-
-func TestFormatV1Source(t *testing.T) {
-	regoFiles, err := filepath.Glob("testfiles/v1/*.rego")
-	if err != nil {
-		panic(err)
-	}
-
-	for _, rego := range regoFiles {
-		t.Run(rego, func(t *testing.T) {
-			contents, err := os.ReadFile(rego)
-			if err != nil {
-				t.Fatalf("Failed to read rego source: %v", err)
-			}
-
-			expected, err := os.ReadFile(rego + ".formatted")
-			if err != nil {
-				t.Fatalf("Failed to read expected rego source: %v", err)
-			}
-
-			popts := ast.ParserOptions{
-				RegoVersion: ast.RegoV1,
-			}
-			opts := Opts{
-				RegoVersion:   ast.RegoV1,
-				ParserOptions: &popts,
-			}
-
-			formatted, err := SourceWithOpts(rego, contents, opts)
-			if err != nil {
-				t.Fatalf("Failed to format file: %v", err)
-			}
-
-			if ln, at := differsAt(formatted, expected); ln != 0 {
-				t.Fatalf("Expected formatted bytes to equal expected bytes but differed near line %d / byte %d (got: %q, expected: %q):\n%s", ln, at, formatted[at], expected[at], prefixWithLineNumbers(formatted))
-			}
-
-			if _, err := ast.ParseModuleWithOpts(rego+".tmp", string(formatted), popts); err != nil {
-				t.Fatalf("Failed to parse formatted bytes: %v", err)
-			}
-
-			formatted, err = SourceWithOpts(rego, formatted, opts)
-			if err != nil {
-				t.Fatalf("Failed to double format file")
-			}
-
-			if ln, at := differsAt(formatted, expected); ln != 0 {
-				t.Fatalf("Expected roundtripped bytes to equal expected bytes but differed near line %d / byte %d:\n%s", ln, at, prefixWithLineNumbers(formatted))
-			}
-
 		})
 	}
 }
@@ -965,6 +923,34 @@ p[x]            {
 		},
 		{
 			note:          "v1 -> v1", // from non-default rego-version
+			toRegoVersion: ast.RegoV1,
+			module: `package test
+
+p    contains    x    if      {
+	x = "a"
+}`,
+			expFormatted: `package test
+
+p contains x if {
+	x = "a"
+}
+`,
+		},
+		{
+			note:          "v0 -> v2",
+			toRegoVersion: ast.RegoV1,
+			module: `package test
+
+p[x]            {
+	x = "a"
+}`,
+			expErrs: []string{
+				"test.rego:3: rego_parse_error: `if` keyword is required before rule body",
+				"test.rego:3: rego_parse_error: `contains` keyword is required for partial set rules",
+			},
+		},
+		{
+			note:          "v1 -> v2",
 			toRegoVersion: ast.RegoV1,
 			module: `package test
 
