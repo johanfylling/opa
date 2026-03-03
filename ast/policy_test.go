@@ -4,16 +4,21 @@
 
 package ast
 
-import "testing"
+import (
+	"testing"
+
+	v1 "github.com/open-policy-agent/opa/v1/ast"
+)
 
 func TestRuleString_DefaultRegoVersion(t *testing.T) {
 	// ast.Rule.String() will respect the rego-version of the ast.Module it is part of.
 
 	tests := []struct {
-		note        string
-		module      string
-		regoVersion RegoVersion
-		exp         string
+		note         string
+		module       string
+		regoVersion  RegoVersion
+		Capabilities *Capabilities
+		exp          string
 	}{
 		{
 			note:        "v0",
@@ -32,6 +37,30 @@ p contains x if { x = "a" }`,
 			exp: `p contains x if { x = "a" }`,
 		},
 		{
+			note:        "v2, contains",
+			regoVersion: RegoV2,
+			module: `package a.b.c
+
+				p contains x if { 
+					x = "a" 
+				}`,
+			Capabilities: addCapabilityFeature(CapabilitiesForThisVersion(), v1.FeatureRegoV2Import),
+			exp:          `p contains x if { x = "a" }`,
+		},
+		{
+			note:        "v2, else",
+			regoVersion: RegoV2,
+			module: `package a.b.c
+
+				p := x if { 
+					x = "a" 
+				} else if {
+					x = "b"
+				}`,
+			Capabilities: addCapabilityFeature(CapabilitiesForThisVersion(), v1.FeatureRegoV2Import),
+			exp:          `p := x if { x = "a" } else = true if { x = "b" }`,
+		},
+		{
 			note: "default rego-version",
 			module: `package a.b.c
 
@@ -47,7 +76,10 @@ p[x] { x = "a" }`,
 			if tc.regoVersion == RegoUndefined {
 				mod = MustParseModule(tc.module)
 			} else {
-				mod = MustParseModuleWithOpts(tc.module, ParserOptions{RegoVersion: tc.regoVersion})
+				mod = MustParseModuleWithOpts(tc.module, ParserOptions{
+					RegoVersion:  tc.regoVersion,
+					Capabilities: tc.Capabilities,
+				})
 			}
 
 			rule := mod.Rules[0]
@@ -82,4 +114,9 @@ wildcard = true { bar[_] = 1 }`
 	if !roundtrip.Equal(mod) {
 		t.Fatalf("Expected roundtripped to equal original but:\n\nExpected:\n\n%v\n\nDoes not equal result:\n\n%v", mod, roundtrip)
 	}
+}
+
+func addCapabilityFeature(caps *Capabilities, feature string) *Capabilities {
+	caps.Features = append(caps.Features, feature)
+	return caps
 }

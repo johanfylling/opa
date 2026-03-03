@@ -111,10 +111,10 @@ func (r *Rule) appendWithOpts(opts toStringOpts, buf []byte) ([]byte, error) {
 
 	if !r.Default {
 		switch opts.RegoVersion() {
-		case RegoV1, RegoV0CompatV1:
-			buf = append(buf, " if { "...)
-		default:
+		case RegoV0:
 			buf = append(buf, " { "...)
+		default:
+			buf = append(buf, " if { "...)
 		}
 		if buf, err = r.Body.AppendText(buf); err != nil {
 			return nil, err
@@ -141,10 +141,10 @@ func (r *Rule) appendElse(opts toStringOpts, buf []byte) ([]byte, error) {
 		}
 	}
 
-	if v := opts.RegoVersion(); v == RegoV1 || v == RegoV0CompatV1 {
-		buf = append(buf, " if { "...)
-	} else {
+	if v := opts.RegoVersion(); v == RegoV0 {
 		buf = append(buf, " { "...)
+	} else {
+		buf = append(buf, " if { "...)
 	}
 	if buf, err = r.Body.AppendText(buf); err != nil {
 		return nil, err

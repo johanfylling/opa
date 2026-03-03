@@ -676,10 +676,11 @@ func TestRuleString_DefaultRegoVersion(t *testing.T) {
 	// ast.Rule.String() will respect the rego-version of the ast.Module it is part of.
 
 	tests := []struct {
-		note        string
-		module      string
-		regoVersion RegoVersion
-		exp         string
+		note         string
+		module       string
+		regoVersion  RegoVersion
+		Capabilities *Capabilities
+		exp          string
 	}{
 		{
 			note:        "v0",
@@ -698,6 +699,30 @@ p contains x if { x = "a" }`,
 			exp: `p contains x if { x = "a" }`,
 		},
 		{
+			note:        "v2, contains",
+			regoVersion: RegoV2,
+			module: `package a.b.c
+
+				p contains x if { 
+					x = "a" 
+				}`,
+			Capabilities: addCapabilityFeature(CapabilitiesForThisVersion(), FeatureRegoV2Import),
+			exp:          `p contains x if { x = "a" }`,
+		},
+		{
+			note:        "v2, else",
+			regoVersion: RegoV2,
+			module: `package a.b.c
+
+				p := x if { 
+					x = "a" 
+				} else if {
+					x = "b"
+				}`,
+			Capabilities: addCapabilityFeature(CapabilitiesForThisVersion(), FeatureRegoV2Import),
+			exp:          `p := x if { x = "a" } else = true if { x = "b" }`,
+		},
+		{
 			note: "default rego-version",
 			module: `package a.b.c
 
@@ -713,7 +738,10 @@ p contains x if { x = "a" }`,
 			if tc.regoVersion == RegoUndefined {
 				mod = MustParseModule(tc.module)
 			} else {
-				mod = MustParseModuleWithOpts(tc.module, ParserOptions{RegoVersion: tc.regoVersion})
+				mod = MustParseModuleWithOpts(tc.module, ParserOptions{
+					RegoVersion:  tc.regoVersion,
+					Capabilities: tc.Capabilities,
+				})
 			}
 
 			rule := mod.Rules[0]
