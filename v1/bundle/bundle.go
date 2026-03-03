@@ -181,9 +181,14 @@ func (m *Manifest) AddRoot(r string) {
 
 func (m *Manifest) SetRegoVersion(v ast.RegoVersion) {
 	m.Init()
-	regoVersion := 0
-	if v == ast.RegoV1 {
+	var regoVersion int
+	switch v {
+	case ast.RegoV1:
 		regoVersion = 1
+	case ast.RegoV2:
+		regoVersion = 2
+	default:
+		regoVersion = 0
 	}
 	m.RegoVersion = &regoVersion
 }
@@ -1117,7 +1122,8 @@ func (b *Bundle) FormatModulesWithOptions(opts BundleFormatOptions) error {
 
 		if module.Parsed != nil {
 			fmtOpts.ParserOptions = &ast.ParserOptions{
-				RegoVersion: module.Parsed.RegoVersion(),
+				RegoVersion:  module.Parsed.RegoVersion(),
+				Capabilities: opts.Capabilities,
 			}
 			if opts.PreserveModuleRegoVersion {
 				fmtOpts.RegoVersion = module.Parsed.RegoVersion()
@@ -1212,6 +1218,8 @@ func (b *Bundle) RegoVersion(def ast.RegoVersion) ast.RegoVersion {
 			return ast.RegoV0
 		case 1:
 			return ast.RegoV1
+		case 2:
+			return ast.RegoV2
 		}
 	}
 	return def
@@ -1234,6 +1242,8 @@ func (b *Bundle) RegoVersionForFile(path string, def ast.RegoVersion) (ast.RegoV
 		return ast.RegoV0, nil
 	} else if *version == 1 {
 		return ast.RegoV1, nil
+	} else if *version == 2 {
+		return ast.RegoV2, nil
 	}
 	return def, fmt.Errorf("unknown bundle rego-version %d for file '%s'", *version, path)
 }

@@ -1192,6 +1192,10 @@ func (c *Compiler) buildRequiredCapabilities() {
 				if !c.moduleIsRegoV1(c.Modules[name]) {
 					features[FeatureRegoV1Import] = struct{}{}
 				}
+			case path.Equal(RegoV2CompatibleRef):
+				if !c.moduleIsRegoV2(c.Modules[name]) {
+					features[FeatureRegoV2Import] = struct{}{}
+				}
 			case path.HasPrefix(futureKeywordsPrefix):
 				if len(path) == 2 {
 					if c.moduleIsRegoV1(c.Modules[name]) {
@@ -1234,6 +1238,8 @@ func (c *Compiler) buildRequiredCapabilities() {
 
 		if c.moduleIsRegoV1(mod) {
 			features[FeatureRegoV1] = struct{}{}
+		} else if c.moduleIsRegoV2(mod) {
+			features[FeatureRegoV2Import] = struct{}{}
 		} else {
 			for _, rule := range mod.Rules {
 				refLen := len(rule.Head.Reference)
@@ -2044,7 +2050,7 @@ func (c *Compiler) checkImports() {
 			}
 		}
 
-		if c.strict || c.moduleIsRegoV1Compatible(c.Modules[name]) {
+		if c.strict || c.moduleIsRegoV1Compatible(c.Modules[name]) || c.moduleIsRegoV2(c.Modules[name]) {
 			modules = append(modules, c.Modules[name])
 		}
 	}
@@ -2054,7 +2060,7 @@ func (c *Compiler) checkImports() {
 
 func (c *Compiler) checkKeywordOverrides() {
 	for _, name := range c.sorted {
-		if c.strict || c.moduleIsRegoV1Compatible(c.Modules[name]) {
+		if c.strict || c.moduleIsRegoV1Compatible(c.Modules[name]) || c.moduleIsRegoV2(c.Modules[name]) {
 			if !c.err(checkRootDocumentOverrides(c.Modules[name])...) {
 				continue
 			}
@@ -2070,10 +2076,27 @@ func (c *Compiler) moduleIsRegoV1(mod *Module) bool {
 			return false
 		case RegoV1:
 			return true
+		default:
+			return false
 		}
-		return false
 	}
+
 	return mod.regoVersion == RegoV1
+}
+
+func (c *Compiler) moduleIsRegoV2(mod *Module) bool {
+	if mod.regoVersion == RegoUndefined {
+		switch c.defaultRegoVersion {
+		case RegoUndefined:
+			c.err(NewError(CompileErr, mod.Package.Loc(), "cannot determine rego version for module"))
+			return false
+		case RegoV2:
+			return true
+		default:
+			return false
+		}
+	}
+	return mod.RegoVersion() == RegoV2
 }
 
 func (c *Compiler) moduleIsRegoV1Compatible(mod *Module) bool {

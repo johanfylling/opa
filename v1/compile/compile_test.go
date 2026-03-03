@@ -210,9 +210,10 @@ func TestCompilerLoadAsBundleSuccess(t *testing.T) {
 
 func TestCompilerLoadAsBundleWithBundleRegoVersion(t *testing.T) {
 	tests := []struct {
-		note    string
-		files   map[string]string
-		expErrs []string
+		note         string
+		files        map[string]string
+		capabilities *ast.Capabilities
+		expErrs      []string
 	}{
 		{
 			note: "No bundle rego version (default version)",
@@ -373,6 +374,52 @@ p contains "B" if {
 			},
 		},
 		{
+			note: "v0 bundle rego version, v2 file override",
+			files: map[string]string{
+				".manifest": `{
+	"rego_version": 0,
+	"file_rego_versions": {
+		"*/test2.rego": 2
+	}
+}`,
+				"test1.rego": `package test
+p["A"] {
+	input.x == 1
+}`,
+				"test2.rego": `package test
+p contains "B" if {
+	input.x == 2
+}`,
+			},
+			capabilities: func() *ast.Capabilities {
+				caps := ast.CapabilitiesForThisVersion(ast.CapabilitiesRegoVersion(ast.RegoV0))
+				caps.Features = append(caps.Features, ast.FeatureRegoV2Import)
+				return caps
+			}(),
+		},
+		{
+			note: "v0 bundle rego version, v2 file override, missing capability",
+			files: map[string]string{
+				".manifest": `{
+	"rego_version": 0,
+	"file_rego_versions": {
+		"*/test2.rego": 2
+	}
+}`,
+				"test1.rego": `package test
+p["A"] {
+	input.x == 1
+}`,
+				"test2.rego": `package test
+p contains "B" if {
+	input.x == 2
+}`,
+			},
+			expErrs: []string{
+				"rego_parse_error: illegal capabilities: rego_v2_import feature required for parsing v2 Rego",
+			},
+		},
+		{
 			note: "v1 bundle rego version, v0 file override",
 			files: map[string]string{
 				".manifest": `{
@@ -412,6 +459,52 @@ p contains "B" if {
 			expErrs: []string{
 				"rego_parse_error: var cannot be used for rule name",
 				"rego_parse_error: string cannot be used for rule name",
+			},
+		},
+		{
+			note: "v1 bundle rego version, v2 file override",
+			files: map[string]string{
+				".manifest": `{
+	"rego_version": 1,
+	"file_rego_versions": {
+		"*/test2.rego": 2
+	}
+}`,
+				"test1.rego": `package test
+p contains "A" if {
+	input.x == 1
+}`,
+				"test2.rego": `package test
+p contains "B" if {
+	input.x == 2
+}`,
+			},
+			capabilities: func() *ast.Capabilities {
+				caps := ast.CapabilitiesForThisVersion(ast.CapabilitiesRegoVersion(ast.RegoV0))
+				caps.Features = append(caps.Features, ast.FeatureRegoV2Import)
+				return caps
+			}(),
+		},
+		{
+			note: "v1 bundle rego version, v2 file override, missing capability",
+			files: map[string]string{
+				".manifest": `{
+	"rego_version": 1,
+	"file_rego_versions": {
+		"*/test2.rego": 2
+	}
+}`,
+				"test1.rego": `package test
+p contains "A" if {
+	input.x == 1
+}`,
+				"test2.rego": `package test
+p contains "B" if {
+	input.x == 2
+}`,
+			},
+			expErrs: []string{
+				"rego_parse_error: illegal capabilities: rego_v2_import feature required for parsing v2 Rego",
 			},
 		},
 	}
@@ -465,7 +558,8 @@ p contains "B" if {
 					compiler := New().
 						WithFS(fsys).
 						WithPaths(path).
-						WithAsBundle(true)
+						WithAsBundle(true).
+						WithCapabilities(tc.capabilities)
 
 					err := compiler.Build(ctx)
 

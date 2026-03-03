@@ -122,9 +122,10 @@ func TestCompileModules_DefaultRegoVersion(t *testing.T) {
 
 func TestCompileModulesWithOpt_DefaultRegoVersion(t *testing.T) {
 	tests := []struct {
-		note    string
-		modules map[string]string
-		expErrs []string
+		note         string
+		modules      map[string]string
+		capabilities *Capabilities
+		expErrs      []string
 	}{
 		// NOT default rego-version
 		{
@@ -187,6 +188,37 @@ func TestCompileModulesWithOpt_DefaultRegoVersion(t *testing.T) {
 			},
 		},
 
+		{
+			note: "rego.v2 import, no v1 compile-time violations",
+			modules: map[string]string{
+				"test.rego": `package test
+					import rego.v2
+
+					p contains x if { 
+						x = "a" 
+					}`,
+			},
+			capabilities: addCapabilityFeature(CapabilitiesForThisVersion(), FeatureRegoV2Import),
+		},
+		{
+			note: "rego.v2 import, v1 compile-time violations",
+			modules: map[string]string{
+				"test.rego": `package test
+					import rego.v2
+
+					import data.foo
+					import data.bar as foo
+
+					p contains x if { 
+						x = "a" 
+					}`,
+			},
+			capabilities: addCapabilityFeature(CapabilitiesForThisVersion(), FeatureRegoV2Import),
+			expErrs: []string{
+				"test.rego:5: rego_compile_error: import must not shadow import data.foo",
+			},
+		},
+
 		// default rego-version
 		{
 			note: "v1 module, no v1 compile-time violations",
@@ -216,9 +248,16 @@ func TestCompileModulesWithOpt_DefaultRegoVersion(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.note, func(t *testing.T) {
-			_, err := CompileModulesWithOpt(tc.modules, CompileOpts{EnablePrintStatements: true})
+			_, err := CompileModulesWithOpt(tc.modules, CompileOpts{
+				ParserOptions:         ParserOptions{Capabilities: tc.capabilities},
+				EnablePrintStatements: true,
+			})
 
 			if len(tc.expErrs) > 0 {
+				if err == nil {
+					t.Fatalf("Expected errors:\n\n%s\n\nbut got nil", tc.expErrs)
+				}
+
 				for _, expErr := range tc.expErrs {
 					if err := err.Error(); !strings.Contains(err, expErr) {
 						t.Fatalf("Expected error to contain:\n\n%s\n\nbut got:\n\n%s", expErr, err)

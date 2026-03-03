@@ -378,7 +378,7 @@ func (p *Parser) Parse() ([]Statement, []*Comment, Errors) {
 			return nil, nil, Errors{
 				&Error{
 					Code:     ParseErr,
-					Message:  "illegal capabilities: rego_v1 feature required for parsing v1 Rego",
+					Message:  fmt.Sprintf("illegal capabilities: %s feature required for parsing v1 Rego", FeatureRegoV1),
 					Location: nil,
 				},
 			}
@@ -388,7 +388,7 @@ func (p *Parser) Parse() ([]Statement, []*Comment, Errors) {
 			return nil, nil, Errors{
 				&Error{
 					Code:     ParseErr,
-					Message:  "illegal capabilities: rego_v1 feature required for parsing v1 Rego",
+					Message:  fmt.Sprintf("illegal capabilities: %s feature required for parsing v2 Rego", FeatureRegoV2Import),
 					Location: nil,
 				},
 			}

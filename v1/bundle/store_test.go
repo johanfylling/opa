@@ -4156,10 +4156,14 @@ func TestBundleStoreHelpers(t *testing.T) {
 }
 
 func TestActivate_DefaultRegoVersion(t *testing.T) {
+	v2Caps := ast.CapabilitiesForThisVersion()
+	v2Caps.Features = append(v2Caps.Features, ast.FeatureRegoV2Import)
+
 	tests := []struct {
 		note              string
 		module            string
 		customRegoVersion ast.RegoVersion
+		capabilities      *ast.Capabilities
 		expErrs           []string
 	}{
 		// NOT default rego-version
@@ -4198,6 +4202,42 @@ func TestActivate_DefaultRegoVersion(t *testing.T) {
 			},
 		},
 
+		{
+			note: "rego.v2 import, no capabilities",
+			module: `package test
+					import rego.v2
+
+					p contains x if { 
+						x = "a" 
+					}`,
+			expErrs: []string{
+				"rego_parse_error: invalid import, `rego.v2` is not supported by current capabilities",
+			},
+		},
+		{
+			note: "rego.v2 import, no v1/v2 parse-time violations",
+			module: `package test
+					import rego.v2
+
+					p contains x if { 
+						x = "a" 
+					}`,
+			capabilities: v2Caps,
+		},
+		{
+			note: "rego.v2 import, v1 parse-time violations",
+			module: `package test
+					import rego.v2
+
+					p contains x { 
+						x = "a" 
+					}`,
+			expErrs: []string{
+				"rego_parse_error: `if` keyword is required before rule body",
+			},
+			capabilities: v2Caps,
+		},
+
 		// default rego-version
 		{
 			note: "v1 module, no v1 parse-time violations",
@@ -4228,6 +4268,15 @@ func TestActivate_DefaultRegoVersion(t *testing.T) {
 					}`,
 			customRegoVersion: ast.RegoV0,
 		},
+		{
+			note: "v2 module, v2 custom rego-version",
+			module: `package test
+					p contains x if { 
+						x = "a" 
+					}`,
+			customRegoVersion: ast.RegoV2,
+			capabilities:      v2Caps,
+		},
 	}
 
 	for _, tc := range tests {
@@ -4250,13 +4299,17 @@ func TestActivate_DefaultRegoVersion(t *testing.T) {
 			}}
 
 			opts := ActivateOpts{
-				Ctx:      t.Context(),
-				Txn:      txn,
-				Store:    store,
-				Compiler: ast.NewCompiler().WithDefaultRegoVersion(ast.RegoV0CompatV1),
-				Metrics:  metrics.NoOp(),
-				Bundles:  bundles,
+				Ctx:   t.Context(),
+				Txn:   txn,
+				Store: store,
+				Compiler: ast.NewCompiler().
+					WithDefaultRegoVersion(ast.RegoV0CompatV1).
+					WithCapabilities(tc.capabilities),
+				Metrics: metrics.NoOp(),
+				Bundles: bundles,
 			}
+
+			opts.ParserOptions.Capabilities = tc.capabilities
 
 			if tc.customRegoVersion != ast.RegoUndefined {
 				opts.ParserOptions.RegoVersion = tc.customRegoVersion

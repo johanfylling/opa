@@ -156,6 +156,17 @@ func TestBundleRegoVersion(t *testing.T) {
 	if b.RegoVersion(ast.RegoV1) != ast.RegoV0 {
 		t.Fatal("expected v0")
 	}
+
+	// Set rego-version to v2
+	b.SetRegoVersion(ast.RegoV2)
+
+	if b.Manifest.RegoVersion == nil || *b.Manifest.RegoVersion != 2 {
+		t.Fatal("expected v2")
+	}
+
+	if b.RegoVersion(ast.RegoV0) != ast.RegoV2 {
+		t.Fatal("expected v2")
+	}
 }
 
 func TestRead(t *testing.T) {
@@ -172,9 +183,10 @@ func TestReadWithBaseDir(t *testing.T) {
 
 func TestRead_DefaultRegoVersion(t *testing.T) {
 	tests := []struct {
-		note    string
-		module  string
-		expErrs []string
+		note         string
+		module       string
+		capabilities *ast.Capabilities
+		expErrs      []string
 	}{
 		{
 			note: "v0",
@@ -205,6 +217,32 @@ p contains x if {
 	x := "a"
 }`,
 		},
+		{
+			note: "rego.v2 import",
+			module: `package example
+import rego.v2
+
+p contains x if {
+	x := "a"
+}`,
+			capabilities: func() *ast.Capabilities {
+				caps := ast.CapabilitiesForThisVersion()
+				caps.Features = append(caps.Features, ast.FeatureRegoV2Import)
+				return caps
+			}(),
+		},
+		{
+			note: "rego.v2 import, no capabilities",
+			module: `package example
+import rego.v2
+
+p contains x if {
+	x := "a"
+}`,
+			expErrs: []string{
+				"test.rego:2: rego_parse_error: invalid import, `rego.v2` is not supported by current capabilities",
+			},
+		},
 	}
 
 	for _, tc := range tests {
@@ -216,7 +254,7 @@ p contains x if {
 
 			buf := archive.MustWriteTarGz(files)
 			loader := NewTarballLoaderWithBaseURL(buf, "")
-			br := NewCustomReader(loader)
+			br := NewCustomReader(loader).WithCapabilities(tc.capabilities)
 
 			bundle, err := br.Read()
 

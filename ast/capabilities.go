@@ -23,6 +23,7 @@ const FeatureRefHeadStringPrefixes = v1.FeatureRefHeadStringPrefixes
 const FeatureRefHeads = v1.FeatureRefHeads
 const FeatureRegoV1 = v1.FeatureRegoV1
 const FeatureRegoV1Import = v1.FeatureRegoV1Import
+const FeatureRegoV2Import = v1.FeatureRegoV2Import
 
 // Capabilities defines a structure containing data that describes the capabilities
 // or features supported by a particular version of OPA.

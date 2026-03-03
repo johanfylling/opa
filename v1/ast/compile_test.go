@@ -10692,6 +10692,18 @@ func TestCompilerBuildRequiredCapabilities(t *testing.T) {
 			features: []string{"rego_v1"},
 		},
 		{
+			note: "rego.v2 import",
+			module: `
+				package x
+				
+				import rego.v2
+
+				p if { true }
+			`,
+			opts:     CompileOpts{ParserOptions: ParserOptions{Capabilities: addCapabilityFeature(CapabilitiesForThisVersion(), FeatureRegoV2Import)}},
+			features: []string{"rego_v2_import"},
+		},
+		{
 			note: "future.keywords wildcard, v0 module",
 			module: `
 				package x
